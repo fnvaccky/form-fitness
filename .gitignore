@@ -1,0 +1,15 @@
+node_modules/
+dist/
+test-results/
+*.tar.gz
+
+.wrangler/
+.dev.vars
+.env*
+!.env.example
+.local/
+.vercel/
+artifacts/
+*.zip
+supabase/.temp/
+supabase/.branches/

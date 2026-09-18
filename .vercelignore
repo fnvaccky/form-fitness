@@ -1,0 +1,11 @@
+.git
+.openai
+.local
+.env*
+!.env.example
+artifacts
+tests
+legacy
+test-results
+supabase
+*.zip

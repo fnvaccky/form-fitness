@@ -1,0 +1,12 @@
+import {readFile,writeFile} from 'node:fs/promises';
+import {vercelRequest} from './vercel-client.js';
+const saved=JSON.parse(await readFile('.local/deployment.json','utf8'));
+const deployment=await vercelRequest('/v13/deployments/'+saved.id);
+const project=await vercelRequest('/v9/projects/'+saved.projectId);
+const anonymous=await fetch(saved.url,{redirect:'manual'});
+const privateGate=anonymous.status===401||anonymous.status===403||(anonymous.status>=300&&anonymous.status<400&&/vercel\.com/.test(anonymous.headers.get('location')||''));
+const evidence={...saved,status:deployment.readyState,protection:project.ssoProtection,anonymousStatus:anonymous.status,anonymousAccessBlocked:privateGate,checkedAt:new Date().toISOString()};
+await writeFile('.local/deployment-verification.json',JSON.stringify(evidence,null,2));
+console.log(JSON.stringify(evidence));
+if(deployment.readyState==='READY'&&!privateGate)throw Error('Deployment privacy check failed.');
+if(deployment.readyState==='ERROR')process.exitCode=1;

@@ -46,4 +46,3 @@ npm run package:source
 Auth tests require the server secret and create/remove temporary clearly labeled Auth fixtures without sending email. Integration tests require `APP_WORKSPACE=demo` and the restricted local credential file. They write clearly labeled sample records. Database tests run inside a rollback transaction using `tests/database.sql`. See [TEST_RESULTS.md](TEST_RESULTS.md) for performed checks and limitations.
 
 Deployment and owner setup: [DEPLOYMENT.md](DEPLOYMENT.md). Data preservation and rollback: [MIGRATION_NOTES.md](MIGRATION_NOTES.md). Source archive: `artifacts/form-fitness-source.zip`.
-
