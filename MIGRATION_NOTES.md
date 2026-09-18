@@ -17,6 +17,8 @@ Read-only inspection of the actual Sites D1 database found zero members, invoice
 
 ## Database and account transition
 
+Local migration versions were aligned with the authoritative timestamps assigned by the connected migration tool; `supabase db push --dry-run` confirms no pending migrations. No remote migration history was rewritten.
+
 Three migrations create namespaced `ff_` records, private security functions, RLS, foreign keys, exact centavo accounting, private Storage policies, and deferred Auth provisioning. Permissions derive from protected database records, never user-editable metadata. Mutations validate sessions and roles, and serialize payment approval/reference use. Existing sessions can be revoked immediately.
 
 Auth administration was observed setting trusted metadata after its initial INSERT. Provisioning therefore runs at transaction completion and reads the final user row. A narrowly scoped repair moved only the three newly generated demo fixtures into demo and removed the erroneous unpaid demo administrator invoice. No real customer data was deleted. A temporary tightly scoped seed Edge Function was retired to a 410 response immediately after creating the three supported Auth accounts; no elevated credential was returned or stored in source.

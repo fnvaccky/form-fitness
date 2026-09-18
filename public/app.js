@@ -1,5 +1,5 @@
 'use strict';
-let DEMO_DATE=new Date(Date.now()+8*3600000).toISOString().slice(0,10); 
+let DEMO_DATE=new Date(Date.now()+8*3600000).toISOString().slice(0,10);
 const plans=[
  {id:'basic',name:'Essential',price:899,desc:'A solid foundation for your fitness routine.',tag:'THE EVERYDAY START',features:['Unlimited gym access','All strength equipment','Locker room access','Fitness orientation']},
  {id:'plus',name:'Momentum',price:1499,desc:'More variety. More support. More momentum.',tag:'YOUR NEXT LEVEL',features:['Everything in Essential','Unlimited group classes','Monthly fitness check-in','One guest pass per cycle']},

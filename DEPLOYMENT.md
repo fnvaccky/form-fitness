@@ -10,7 +10,7 @@
 
 Vercel Authentication is configured for **all deployments**, including production aliases. A preview URL and FORM login alone are not protection. Anonymous requests must redirect to Vercel sign-in or return 401/403. No plan upgrade was made. See the initial deployment incident in MIGRATION_NOTES.md.
 
-The source repository is the private `fnvaccky/form-fitness` repository.
+The source repository is [fnvaccky/form-fitness](https://github.com/fnvaccky/form-fitness), verified private. Source is uploaded there; deployment currently uses the explicit protected REST workflow below. Automatic Git deployments are not enabled.
 
 ## Reproduce the private preview
 

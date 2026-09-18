@@ -101,4 +101,3 @@ select pg_temp.must_fail($q$select public.ff_command('plans','{}')$q$,'Revoked s
 reset role;
 select count(*) as passed_checks,jsonb_agg(label) as checks from ff_test_log;
 rollback;
-

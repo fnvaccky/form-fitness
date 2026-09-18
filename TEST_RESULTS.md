@@ -1,11 +1,13 @@
 # Verification results
 
-Verified 18 September 2026 against the existing Supabase project `ivxbrhqqfgmhfpgpauzh` and NACKY's protected Vercel preview. Results below are observed, not inferred from a successful build.
+Verified 18 September 2026 UTC (19 September in Manila for final checks) against the existing Supabase project `ivxbrhqqfgmhfpgpauzh` and NACKY's protected Vercel preview. Results below are observed, not inferred from a successful build.
 
 ## Passed
 
 | Command/check | Actual result |
 | --- | --- |
+| `npm ci` | Clean lockfile installation succeeds; 0 vulnerabilities |
+| `supabase db push --dry-run` | Remote database up to date; no pending migrations |
 | `npm run check` | JavaScript syntax passes |
 | `npm run build` | Static build succeeds; Vercel Node function deployment READY |
 | `npm test` | 8 unit tests pass |
@@ -44,6 +46,6 @@ Auth tests use supported Supabase administration and the real Node API. Final tr
 - Live Gmail SMTP acceptance and actual inbox receipt, using configured owner credentials and an authorized recipient. No Gmail credential or live-send claim is included.
 - Owner's actual GCash/bank QR images and a reconciled real payment. No real funds were tested.
 - Physical camera permission, autofocus and scanning on the intended staff phones. Actual image decoding fallback was tested.
-- Supabase leaked-password protection remains disabled; review account support before enabling.
+- [Supabase leaked-password protection](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection) remains disabled; review account support before enabling. The final security advisor reported only this warning.
 
 Raw JSON evidence and screenshots are in ignored `test-results/` on the original workstation. They are excluded from the distributable archive. Demo records remain clearly labeled; production test fixtures are removed. The original private Sites deployment and D1 database remain untouched.
