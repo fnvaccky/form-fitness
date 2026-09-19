@@ -5,6 +5,17 @@ import { BUCKET, stateFor, planView, paymentView, userView, signedImage } from '
 import { flushEmails } from './notifications.js';
 
 function send(res, status, data) { res.statusCode=status; res.end(JSON.stringify(data)); }
+// Supabase Auth email types this application accepts, mapped to where the member lands
+// afterwards. Signup confirmations already have a password; recovery and invites do not.
+const CONFIRMATION_TYPES = { signup:'/', email:'/', recovery:'/#/set-password', invite:'/#/set-password' };
+// Confirmation links are opened by top-level browser navigation, so a JSON body would be
+// shown to the member as raw text. Every interpolated value below is a fixed string or the
+// validated origin; the token is never echoed back into the page.
+function confirmationPage(res, origin, status, title, detail) {
+  res.statusCode=status;
+  res.setHeader('Content-Type','text/html; charset=utf-8');
+  return res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow"><title>FORM Fitness</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#143d32;color:#f4f6f5;font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:26rem;padding:2rem;text-align:center}h1{font-size:1.35rem;margin:0 0 .75rem}p{margin:0 0 1.5rem;opacity:.85}a{display:inline-block;padding:.7rem 1.4rem;border-radius:999px;background:#f4f6f5;color:#143d32;text-decoration:none;font-weight:600}</style></head><body><main><h1>${title}</h1><p>${detail}</p><a href="${origin}/">Return to FORM Fitness</a></main></body></html>`);
+}
 async function readBody(req) {
   if (!req.headers['content-type']?.includes('application/json')) fail('Use a JSON request.',415);
   let body=req.body;
@@ -64,16 +75,23 @@ export async function handle(req,res,env=process.env) {
     if (path==='/recovery' && req.method==='POST') {
       if(workspace==='demo') fail('Reset demo credentials using the secure local seed script.',403);
       const email=String(body.email||'').trim();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))fail('Enter a valid email address.');
-      const {error}=await client.auth.resetPasswordForEmail(email,{redirectTo:origin+'/api/auth/callback?next=recovery'});
+      const {error}=await client.auth.resetPasswordForEmail(email,{redirectTo:origin+'/api/auth/callback'});
       if(error && error.status===429)fail('Too many recovery attempts. Try again later.',429);
       if(error)fail('Password recovery is currently unavailable. Contact the gym.',503);
       return send(res,200,{ok:true,message:'If the account exists, check your email for a password setup link.'});
     }
     if (path==='/auth/callback' && req.method==='GET') {
-      const code=url.searchParams.get('code');
-      if(!code)fail('The sign-in link is missing or invalid. Request a new link.');
-      const {error}=await client.auth.exchangeCodeForSession(code);if(error)fail('This link expired or was already used. Request a new link.');
-      res.statusCode=303;res.setHeader('Location',origin+'/#/set-password');return res.end();
+      // Verified against @supabase/supabase-js 2.116.0: verifyOtp posts token_hash straight to
+      // GoTrue /verify and saves the session through the cookie adapter. Unlike the PKCE code
+      // exchange it needs no code verifier, so the link still works when the member opens their
+      // email on a different device than the one they registered on.
+      const type=url.searchParams.get('type')||'', tokenHash=url.searchParams.get('token_hash')||'';
+      if(!Object.hasOwn(CONFIRMATION_TYPES,type) || !tokenHash)
+        return confirmationPage(res,origin,400,'This link is not valid','Request a new confirmation or password recovery email, then open the most recent message.');
+      const {error}=await client.auth.verifyOtp({token_hash:tokenHash,type});
+      if(error)
+        return confirmationPage(res,origin,400,'This link expired or was already used','Each link works once and expires quickly. Request a new email, then open the most recent message.');
+      res.statusCode=303;res.setHeader('Location',origin+CONFIRMATION_TYPES[type]);return res.end();
     }
     if (path==='/auth/verify' && req.method==='POST') {
       if(!['invite','recovery','signup'].includes(body.type)||typeof body.tokenHash!=='string')fail('Invalid setup link.');

@@ -49,3 +49,21 @@ Auth tests use supported Supabase administration and the real Node API. Final tr
 - [Supabase leaked-password protection](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection) remains disabled; review account support before enabling. The final security advisor reported only this warning.
 
 Raw JSON evidence and screenshots are in ignored `test-results/` on the original workstation. They are excluded from the distributable archive. Demo records remain clearly labeled; production test fixtures are removed. The original private Sites deployment and D1 database remain untouched.
+
+## Brevo / Supabase Auth email confirmation — 20 September 2026
+
+Change: `GET /api/auth/callback` now verifies a Supabase `token_hash` with `verifyOtp` instead of exchanging a PKCE `code`; `POST /recovery` no longer appends `?next=recovery`.
+
+| Command/check | Actual result |
+| --- | --- |
+| `npm run check` | JavaScript syntax passes |
+| `npm test` | 10 unit tests pass (8 existing, 2 new) |
+| `npm run test:auth` | **Not executed.** Fails at `tests/auth.js:33` with `AuthApiError: Invalid API key` (401) because `.env.local` still holds the placeholder `SUPABASE_SECRET_KEY`. No Supabase records were created or modified. |
+
+Token type verified against the installed `@supabase/supabase-js` and `@supabase/auth-js` 2.116.0 rather than assumed: `VerifyTokenHashParams` is `{ token_hash, type: EmailOtpType }`, and `EmailOtpType` resolves to `'signup' | 'invite' | 'magiclink' | 'recovery' | 'email_change' | 'email' | (string & {})`. The trailing `(string & {})` means the union does not constrain the value at runtime and `verifyOtp` forwards `type` verbatim to GoTrue `/verify`, so the API keeps its own explicit allowlist. `signup` and `email` are both accepted because Supabase's own documented template uses `type=email` while the default template emits `type=signup`.
+
+New unit coverage runs fully offline against a local fake GoTrue endpoint: malformed, unsupported and tokenless links return `400 text/html` rather than a JSON body; valid `signup`, `email`, `recovery` and `invite` hashes return `303` to the correct destination with an `HttpOnly` cookie; and the request sent to `/auth/v1/verify` is asserted to carry no `code_verifier`, which is the regression guard for the cross-device failure.
+
+`tests/auth.js` gains three connected groups, still pending credentials: a recovery link followed as a real top-level `GET` with a cookie jar, its replay refused as HTML without echoing the token, and a `generateLink` signup confirmation landing on `/` with a live member session instead of the password setup form.
+
+Not verified: live Brevo SMTP acceptance, inbox delivery, and the hosted click-through. Vercel all-deployment protection still gates `/api/*`, so a member clicking a confirmation link on the hosted app meets the Vercel sign-in wall unless they hold authorized Vercel access. Production deployment and the production workspace were not touched.

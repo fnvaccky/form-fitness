@@ -29,14 +29,48 @@ The deployment script requires demo mode, installs encrypted preview variables, 
 
 The three checked-in migrations have already been applied. Do not reset the database or replay applied migrations blindly. For a future change, run `supabase login`, `supabase link --project-ref ivxbrhqqfgmhfpgpauzh`, review `supabase db push --dry-run`, then apply only pending reviewed migrations. The `ff_` tables and private functions belong to this application; unrelated tables must remain untouched.
 
-Auth URL configuration has been applied and verified, and Supabase now enforces a 12-character minimum password. For future changes, in Supabase Authentication > URL Configuration, set the Site URL to the exact protected deployment used for real accounts. Add exact callback URLs (avoid wildcard domains):
+Auth URL configuration has been applied and verified, and Supabase now enforces a 12-character minimum password. For future changes, in Supabase Authentication > URL Configuration, set the Site URL to the exact protected deployment used for real accounts. Add one exact callback URL per environment (avoid wildcard domains):
 
 - `http://localhost:4173/api/auth/callback`
-- `http://localhost:4173/api/auth/callback?next=recovery`
-- `https://form-fitness-1rrt0d886-achillespasuncion-2666.vercel.app/api/auth/callback`
-- `https://form-fitness-1rrt0d886-achillespasuncion-2666.vercel.app/api/auth/callback?next=recovery`
+- `https://<preview-or-production-host>/api/auth/callback`
+
+Only the `redirectTo` value the API sends is matched against this allowlist, so the bare callback URL is sufficient; the token query is appended later by the email template. The earlier `?next=recovery` entries are obsolete and can be removed — the callback now derives its destination from the link's `type`.
 
 Configure Supabase's own Auth email provider for confirmation/recovery. This is separate from the application's Gmail notification sender. Confirm email confirmation and recovery on an address you control. Enable leaked-password protection if available on the account; the security advisor currently reports it disabled. New deployment hostnames require new exact callback allowlist entries. A recipient also needs authorized Vercel access while protection is enabled.
+
+### Email confirmation links
+
+`GET /api/auth/callback` verifies a Supabase `token_hash` with `verifyOtp` and accepts the types `signup`, `email`, `recovery` and `invite`. It redirects a confirmed signup to `/` (already signed in, password chosen at registration) and recovery or invite to `/#/set-password`. Anything invalid, expired or replayed renders an HTML page, because these URLs are opened directly by a mail client.
+
+This replaces the previous PKCE `code` exchange. `@supabase/ssr` forces `flowType: 'pkce'` on the server client, and the PKCE code verifier lives in a cookie belonging to the browser that started the flow, so a code link failed whenever a member opened their email on a different device. `verifyOtp` carries no verifier and works across devices.
+
+Both email templates must therefore use `{{ .TokenHash }}`, not `{{ .ConfirmationURL }}`. In Supabase Authentication > Email Templates:
+
+- **Confirm signup** — `{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=signup`
+- **Reset password** — `{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=recovery`
+
+Use `{{ .RedirectTo }}`, never `{{ .SiteURL }}`. `RedirectTo` carries the per-environment `APP_ORIGIN` the API supplied, so one template serves localhost, preview and production. `SiteURL` is a single fixed value and would send every environment's mail to the same host. Updating these templates is a prerequisite for the callback, not an optional step: a template still emitting `{{ .ConfirmationURL }}` produces a link the callback rejects.
+
+Admin invitations are unaffected. They never travel through Supabase mail — `POST /members` builds a one-time `#/set-password` link from `generateLink` for secure manual handoff.
+
+### Brevo SMTP
+
+Supabase Auth sends all confirmation and recovery mail. Brevo is configured only inside Supabase, in Project Settings > Authentication > SMTP Settings:
+
+| Field | Value |
+| --- | --- |
+| Host | `smtp-relay.brevo.com` |
+| Port | `587` |
+| Username | Brevo SMTP login (the `…@smtp-brevo.com` identifier, not the account email) |
+| Password | Brevo **SMTP key** (not the account password, not a v3 API key) |
+| Sender email | An address verified in Brevo under Senders, Domains & Dedicated IPs |
+| Sender name | `FORM Fitness` |
+
+These credentials belong in the Supabase Dashboard only. They are never added to `public/`, to `.env*`, to Vercel environment variables, or to Git — the application never speaks to Brevo directly. Verify the sender domain in Brevo and publish its SPF and DKIM records before real use, or confirmations will be spam-filtered. Brevo's free tier caps daily sends.
+
+After enabling custom SMTP, raise the email limit in Authentication > Rate Limits. The built-in default is roughly two messages per hour and will reject real registrations; `POST /signup` surfaces that as a 429 with a retry message.
+
+Brevo here is unrelated to `src/notifications.js`, which still delivers member notifications over the owner's Gmail sender. Authentication does not depend on that queue.
 
 The `form-fitness-private` bucket is private. Do not make it public. Migrations provide policies for member photos/receipts and staff payment images. The API returns short-lived signed image URLs.
 

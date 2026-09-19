@@ -85,3 +85,55 @@ test('notification sender records acceptance, rejects duplicate claims and prese
     assert.equal(patches[0].status,'needs_review');
   }finally{server.close();}
 });
+
+// Email links are opened by top-level browser navigation, so failures must render a page.
+test('email confirmation callback rejects malformed links with an HTML page, never JSON',async()=>{
+  let origin='';
+  const server=http.createServer((req,res)=>handle(req,res,{SUPABASE_URL:'https://example.supabase.co',SUPABASE_PUBLISHABLE_KEY:'publishable-placeholder',APP_ORIGIN:origin}));
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  origin=`http://127.0.0.1:${server.address().port}`;
+  try{
+    for(const query of ['','?type=signup','?token_hash=abc','?token_hash=abc&type=bogus','?token_hash=abc&type=email_change']){
+      const response=await fetch(origin+'/api/auth/callback'+query,{redirect:'manual'});
+      assert.equal(response.status,400,query);
+      assert.match(response.headers.get('content-type'),/text\/html/,query);
+      const body=await response.text();
+      assert.match(body,/<!doctype html>/i,query);
+      assert.doesNotMatch(body,/^\s*\{/,query);
+      assert.doesNotMatch(body,/abc/,'the token must never be echoed into the page');
+    }
+  }finally{server.close();}
+});
+
+test('email confirmation callback verifies token_hash without PKCE and routes by type',async()=>{
+  const requests=[];
+  const encode=value=>Buffer.from(JSON.stringify(value)).toString('base64url');
+  const userId='11111111-2222-3333-4444-555555555555';
+  const expires=Math.floor(Date.now()/1000)+3600;
+  const accessToken=`${encode({alg:'HS256',typ:'JWT'})}.${encode({sub:userId,aud:'authenticated',exp:expires,session_id:'66666666-7777-8888-9999-000000000000'})}.test-signature`;
+  const supabase=http.createServer(async(req,res)=>{
+    let raw='';for await(const chunk of req)raw+=chunk;
+    requests.push({url:req.url,body:raw?JSON.parse(raw):null});
+    res.setHeader('Content-Type','application/json');
+    res.end(JSON.stringify({access_token:accessToken,token_type:'bearer',expires_in:3600,expires_at:expires,refresh_token:'fake-refresh-token',
+      user:{id:userId,aud:'authenticated',role:'authenticated',email:'confirm@example.invalid',app_metadata:{},user_metadata:{},created_at:new Date().toISOString()}}));
+  });
+  await new Promise(resolve=>supabase.listen(0,'127.0.0.1',resolve));
+  let origin='';
+  const server=http.createServer((req,res)=>handle(req,res,{SUPABASE_URL:`http://127.0.0.1:${supabase.address().port}`,SUPABASE_PUBLISHABLE_KEY:'publishable-placeholder',APP_ORIGIN:origin}));
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  origin=`http://127.0.0.1:${server.address().port}`;
+  try{
+    for(const [type,destination] of [['signup','/'],['email','/'],['recovery','/#/set-password'],['invite','/#/set-password']]){
+      const response=await fetch(`${origin}/api/auth/callback?token_hash=hash-${type}&type=${type}`,{redirect:'manual'});
+      assert.equal(response.status,303,type);
+      assert.equal(response.headers.get('location'),origin+destination,type);
+      assert(response.headers.getSetCookie().some(cookie=>/HttpOnly/i.test(cookie)),`${type} must set an HttpOnly session cookie`);
+      const sent=requests.at(-1);
+      assert.match(sent.url,/\/auth\/v1\/verify/,type);
+      assert.equal(sent.body.token_hash,`hash-${type}`,type);
+      assert.equal(sent.body.type,type);
+      assert.equal(sent.body.code_verifier,undefined,'token_hash verification must not depend on a PKCE verifier');
+    }
+  }finally{server.close();supabase.close();}
+});

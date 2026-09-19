@@ -15,6 +15,19 @@ const admin=await request.newContext({baseURL:origin,extraHTTPHeaders:{Origin:or
 const pass=label=>{passed.push(label);console.log('PASS: '+label);};
 const call=async(ctx,path,body,status=200)=>{const response=await ctx.post('/api'+path,{data:body});const value=await response.json();assert.equal(response.status(),status,value.error||path);return value;};
 const suffix=randomUUID().slice(0,8),password='Test9!'+randomBytes(24).toString('base64url');
+// A mail client follows the confirmation link as a plain top-level GET and keeps the cookies
+// it receives. Playwright throws on maxRedirects:0, so drive these groups with fetch instead.
+const mailClient=()=>{
+ const jar=new Map();
+ const absorb=response=>{for(const raw of response.headers.getSetCookie()){const pair=raw.split(';')[0],split=pair.indexOf('=');jar.set(pair.slice(0,split).trim(),pair.slice(split+1));}return response;};
+ const headers=extra=>({Origin:origin,...(jar.size?{Cookie:[...jar].map(([name,value])=>`${name}=${value}`).join('; ')}:{}),...extra});
+ return {
+  open:(type,tokenHash)=>fetch(`${origin}/api/auth/callback?token_hash=${encodeURIComponent(tokenHash)}&type=${type}`,{redirect:'manual',headers:headers()}).then(absorb),
+  get:path=>fetch(origin+'/api'+path,{headers:headers()}).then(absorb),
+  post:(path,body)=>fetch(origin+'/api'+path,{method:'POST',headers:headers({'Content-Type':'application/json'}),body:JSON.stringify(body)}).then(absorb)
+ };
+};
+const hasSessionCookie=response=>response.headers.getSetCookie().some(cookie=>/httponly/i.test(cookie));
 try{
  const email=`form-verification-admin-${suffix}@example.invalid`;
  const made=await db.auth.admin.createUser({email,password,email_confirm:true,app_metadata:{ff_workspace:'production',ff_role:'admin'},user_metadata:{form_fitness:true,name:'AUTH TEST Admin',phone:'09170000001'}});assert.equal(made.error,null);created.push(made.data.user.id);
@@ -32,7 +45,38 @@ try{
  await call(member,'/auth/verify',{type:'recovery',tokenHash:recovery.data.properties.hashed_token});
  const nextPassword='Changed9!'+randomBytes(24).toString('base64url');await call(member,'/set-password',{newPassword:nextPassword});await call(member,'/logout',{});
  await call(member,'/login',{email:memberEmail,password},401);await call(member,'/login',{email:memberEmail,password:nextPassword});pass('Recovery verification and password replacement invalidate the previous password');
- await call(member,'/logout',{});await call(admin,'/logout',{});
+ await call(member,'/logout',{});
+ // Recovery arriving as a hosted email link: GET navigation, no PKCE verifier present.
+ const mailed=await db.auth.admin.generateLink({type:'recovery',email:memberEmail});assert.equal(mailed.error,null);
+ const mailedHash=mailed.data.properties.hashed_token;
+ const recoveryClient=mailClient();
+ const landed=await recoveryClient.open('recovery',mailedHash);
+ assert.equal(landed.status,303);assert.equal(landed.headers.get('location'),origin+'/#/set-password');
+ assert(hasSessionCookie(landed),'The callback must issue an HttpOnly session cookie.');
+ assert.equal((await (await recoveryClient.get('/session')).json()).user.email,memberEmail);
+ const linkedPassword='Linked9!'+randomBytes(24).toString('base64url');
+ const saved=await recoveryClient.post('/set-password',{newPassword:linkedPassword});assert.equal(saved.status,200);
+ pass('Recovery email link verifies token_hash by GET navigation and issues an HttpOnly session');
+ const replayed=await recoveryClient.open('recovery',mailedHash);
+ assert.equal(replayed.status,400);assert.match(replayed.headers.get('content-type'),/text\/html/);
+ assert.doesNotMatch(await replayed.text(),new RegExp(mailedHash.slice(0,12)),'The page must never echo the token.');
+ pass('A reused confirmation link is refused with an HTML page, never a JSON body');
+ // Signup confirmation already has a password, so it must land signed in, not on the setup form.
+ const confirmEmail=`form-verification-confirm-${suffix}@example.invalid`;
+ const signupLink=await db.auth.admin.generateLink({type:'signup',email:confirmEmail,password,
+  options:{data:{form_fitness:true,name:'AUTH TEST Confirm',phone:'09170000004',plan:'basic',start:today(),goal:'Improve fitness'}}});
+ assert.equal(signupLink.error,null);created.push(signupLink.data.user.id);
+ const confirmClient=mailClient();
+ const confirmed=await confirmClient.open('signup',signupLink.data.properties.hashed_token);
+ assert.equal(confirmed.status,303);assert.equal(confirmed.headers.get('location'),origin+'/');
+ assert(hasSessionCookie(confirmed),'Signup confirmation must issue an HttpOnly session cookie.');
+ const confirmedSession=await (await confirmClient.get('/session')).json();
+ assert.equal(confirmedSession.user.email,confirmEmail);assert.equal(confirmedSession.user.role,'member');
+ pass('Signup confirmation lands on the dashboard with a live session, not the password setup form');
+ const rejected=await confirmClient.open('bogus','irrelevant');
+ assert.equal(rejected.status,400);assert.match(rejected.headers.get('content-type'),/text\/html/);
+ pass('An unsupported confirmation type is refused before any Supabase call');
+ await call(admin,'/logout',{});
 }finally{
  await admin.dispose();await member.dispose();server.close();
  for(const id of created.reverse()){
