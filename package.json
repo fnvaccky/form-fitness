@@ -9,7 +9,7 @@
     "dev": "node --watch --env-file-if-exists=.env.local src/dev.js",
     "check": "node scripts/check.js",
     "build": "node build.cjs",
-    "test": "node --test tests/unit.test.js",
+    "test": "node --test tests/unit.test.js tests/paymongo.test.js",
     "test:integration": "node --env-file-if-exists=.env.local tests/integration.js",
     "test:browser": "node --env-file-if-exists=.env.local tests/browser.js",
     "seed:demo": "node --env-file-if-exists=.env.local scripts/seed-demo.js",

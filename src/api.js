@@ -3,6 +3,7 @@ import { serverClient, serviceClient, configuration, result } from './supabase.j
 import { HttpError, fail, contacts, password, startDate, cents, imageData, today } from './validation.js';
 import { BUCKET, stateFor, planView, paymentView, userView, signedImage } from './state.js';
 import { flushEmails } from './notifications.js';
+import { paymentConfig, createCheckout, receiveWebhook } from './paymongo.js';
 
 function send(res, status, data) { res.statusCode=status; res.end(JSON.stringify(data)); }
 async function readBody(req) {
@@ -40,6 +41,11 @@ export async function handle(req,res,env=process.env) {
     const url=new URL(req.url,origin);
     const path=url.pathname==='/api'&&url.searchParams.has('__path')?'/'+url.searchParams.get('__path'):url.pathname.replace(/^\/api/,'')||'/';
     if (!['GET','POST'].includes(req.method)) fail('Method not allowed.',405);
+    if(path==='/paymongo/webhook' && req.method==='POST'){
+      const received=await receiveWebhook(req,env);
+      if(received.status==='paid')await flushEmails(env).catch(()=>{});
+      return send(res,200,received);
+    }
     if (req.method==='POST' && req.headers.origin!==origin) fail('Request origin is not allowed.',403);
     const body=req.method==='POST'?await readBody(req):{};
     const client=serverClient(req,res,env);
@@ -89,6 +95,9 @@ export async function handle(req,res,env=process.env) {
     }
     if(path==='/session' && req.method==='GET')return send(res,200,{user:profile?userView(profile):null,canOwnerLogin:false,date:today()});
     if(!profile)fail('Please sign in to an authorized account for this workspace.',401);
+    if(path==='/paymongo/config' && req.method==='GET')return send(res,200,paymentConfig(env));
+    if(path==='/paymongo/attempts' && req.method==='GET')return send(res,200,{attempts:result(await client.from('ff_paymongo_attempts').select('id,invoice_id,status,amount_cents,provider_payment_id,created_at').order('created_at',{ascending:false}).limit(50))});
+    if(path==='/paymongo/checkout' && req.method==='POST')return send(res,200,await createCheckout(profile,body.invoiceId,env));
     const admin=()=>{if(profile.role!=='admin')fail('Administrator access is required.',403);};
     if(['/members','/payments','/review-payment','/scan','/check-in','/settings/payments','/settings/email','/plans','/manage-member','/email-retry'].includes(path))admin();
     if(path==='/login')return send(res,200,{ok:true,user:userView(profile)});
