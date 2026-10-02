@@ -67,3 +67,85 @@ New unit coverage runs fully offline against a local fake GoTrue endpoint: malfo
 `tests/auth.js` gains three connected groups, still pending credentials: a recovery link followed as a real top-level `GET` with a cookie jar, its replay refused as HTML without echoing the token, and a `generateLink` signup confirmation landing on `/` with a live member session instead of the password setup form.
 
 Not verified: live Brevo SMTP acceptance, inbox delivery, and the hosted click-through. Vercel all-deployment protection still gates `/api/*`, so a member clicking a confirmation link on the hosted app meets the Vercel sign-in wall unless they hold authorized Vercel access. Production deployment and the production workspace were not touched.
+
+## Paid-first registration and walk-in renewals - 2 October 2026
+
+Verified against the local RepReady Supabase stack and installed Edge browser. These results supersede the earlier public-signup and registration-time invitation checks.
+
+| Check | Result |
+| --- | --- |
+| JavaScript syntax, build, diff whitespace | Pass |
+| Unit suite | 16 tests pass |
+| Auth suite | 8 groups pass, including paid account provisioning and emailed-link password setup |
+| Browser onboarding suite | 5 groups pass: static privileges on desktop/mobile, cash collection, captured setup email, live paid pass, future walk-in renewal |
+| Registration resilience | Pass: request replay, account collision preserves payment, completion retry, explicit email retry review, invalid retry does not record cash |
+| Existing rollback database suite | 59 assertions pass |
+| Paid-first rollback database suite | Pass: staff-only RPCs, no premature account, exact full cash, atomic paid provisioning, idempotent renewal, member isolation |
+| Local database security advisors | No warnings or errors reported |
+| Local Auth public signup | Disabled and verified through Auth settings |
+
+Temporary test accounts and financial records were removed, including two fixtures from an earlier interrupted cleanup. Production data and hosted configuration were not changed. Browser evidence is in ignored `test-results/onboarding-paid-pass.png`.
+
+Local setup emails are captured at http://localhost:54324. Real inbox delivery still requires hosted Supabase SMTP and the recovery template described in DEPLOYMENT.md. PayMongo checkout/webhooks and real money movement remain unimplemented and untested; existing online payment submissions still require administrator verification.
+
+## PayMongo e-wallet and card integration - 2 October 2026
+
+`npm run test:paymongo` passes against a mock provider, real local Supabase and Edge. Six groups cover first membership with setup email, card walk-in renewal, existing invoice payment, member self-payment, selectors/checkout QR on mobile, and actual record-payment/renewal form submission. Additional assertions reject forged service-only settlement, invalid/stale signatures, wrong amounts and cash payments while a checkout is open. Duplicate webhooks/status checks create one payment. An uncertain create response reuses the saved checkout and supports administrator recovery of its provider session. The dedicated hosted Web Handler was tested with the newer event envelope and raw signed bytes.
+
+No PayMongo credentials are configured in `.env.local`. Provider requests in this suite are intercepted in memory; no real/test provider transaction or funds movement occurred. Hosted database/configuration and real inbox delivery remain unverified. The five-group cash onboarding regression, 16 unit tests, syntax/build checks, both rollback database suites and local security advisors also pass with the PayMongo schema. Temporary fixtures are removed after the suite. Screenshot: ignored `test-results/paymongo-first-methods.png`.
+
+## PayMongo demo-only hardening - 2 October 2026
+
+This section supersedes the earlier PayMongo configuration/results. Full architecture, file inventory, additive migration and manual dashboard steps are in [PAYMONGO_DEMO_REPORT.md](PAYMONGO_DEMO_REPORT.md). PayMongo now requires the demo workspace and TEST resources. No deployment, Git push, hosted mutation, live payment or real money movement occurred.
+
+Before edits, syntax/build/diff checks passed, npm test passed 16 tests, Auth passed eight groups and the earlier mock-provider suite passed six groups. General integration stopped at its demo-workspace guard; general browser tests stopped because the protected demo credential file was absent. Neither suite ran its intended checks or wrote records.
+
+| Command/check actually run after hardening | Actual result |
+| --- | --- |
+| `npm run check` | PASS JavaScript syntax |
+| `npm run build` | PASS static build |
+| `npm test` | PASS 25 tests: 16 existing plus nine PayMongo groups |
+| `npm run test:auth` | PASS eight groups against local Supabase and captured email |
+| `npm run test:registration` | PASS paid-first replay, collision/payment preservation and explicit email retries |
+| `npm run test:onboarding` | PASS five Edge groups including cash collection, setup link/password, paid pass and future renewal |
+| `npm run test:paymongo` | PASS ten expanded groups: mock provider, temporary demo accounts, real local database and Edge UI |
+| Local psql execution of `tests/database.sql` | PASS 59 assertions; all fixtures rolled back |
+| Local psql execution of `tests/paid-first.sql` | PASS cash/provisioning/renewal checks; all fixtures rolled back |
+| Local psql execution of `tests/paymongo-demo.sql` | PASS 21 checks; all fixtures rolled back |
+| `supabase db advisors --local --type security --level warn --fail-on error` | PASS no issues found |
+| `git diff --check` | PASS; existing CRLF conversion notice only |
+| `npm run package:source` | PASS 73 source files; protected fixtures/build caches excluded, embedded secret patterns checked |
+| `npm run test:integration` | NOT RUN: local app workspace is production; general demo setup unavailable |
+| `npm run test:browser` | NOT RUN: protected general demo credentials absent; dedicated Edge suites above did run |
+
+The expanded suite covers GCash/Maya/GrabPay/card sources; production/live key/request/resource rejection; raw-byte signature verification; unsupported methods; DB price despite client amount tampering; invalid/paid invoices; RLS and service-only settlement; concurrent open-checkout reuse; manual/cash conflicts; wrong currency/amount/method/reference persisted for review; unknown/live events; unique session/payment IDs; transaction rollback and repeated/concurrent webhooks; early webhook binding; exactly-once paid-first provisioning; uncertain-create recovery; unpaid renewal access; return/failed/cancelled non-settlement; enabled-method selectors and retained member manual payment UI.
+
+Intermediate suite runs corrected API-conflict expectations, fixture cleanup order and browser-context setup; the final runs exited successfully. Four exact suite-created UUIDs from an interrupted cleanup were verified and removed. Local inspection found no checkout rows or remaining PayMongo fixture profiles. The four original pending registrations remained, and an additional non-fixture pending registration that appeared during the work was preserved.
+
+Anonymous requests to the supplied https://repready-gym.vercel.app returned 200 for the page and 503 `Payment webhook is not configured.` for POST /api/paymongo/webhook, without a Vercel sign-in redirect. This is reachability evidence, not proof of valid delivery/configuration. The deployed code was not updated and its workspace/schema/keys were not inspected.
+
+NOT RUN: actual PayMongo TEST hosted checkout/authorization, merchant-enabled wallet/card methods, PayMongo-to-Vercel webhook delivery, hosted migration/RLS validation and real inbox delivery. New test credentials must be installed manually; no previously exposed secret was used. Actual `.env.local` remains unchanged with production workspace and no PayMongo credentials. Local setup messages were captured rather than delivered to real inboxes. Demo Gmail notifications remain intentionally suppressed; Auth setup email uses the existing separate path.
+
+
+## PayMongo TEST MODE workspace and dropdown correction - 2 October 2026
+
+This supersedes the earlier demo-only requirement. The current local production-named workspace works with its existing PayMongo test key and signing secret. `.env.local` is byte-for-byte unchanged; APP_WORKSPACE was not changed. The additive `20261002033541_paymongo_test_workspace.sql` was applied transactionally to local Supabase; hosted schema and deployment were not changed.
+
+| Check | Result |
+| --- | --- |
+| `npm run check` | PASS JavaScript syntax |
+| `npm run build` | PASS static build |
+| `npm test` | PASS 25 tests, including workspace-independent test-key configuration, live-key rejection and explicit initiation capabilities |
+| `npm run test:paymongo` | PASS ten groups with production-named local fixtures, intercepted provider calls and headless Edge |
+| `tests/paymongo-demo.sql` via local psql | PASS 21 rollback-only compatibility/security checks |
+| `supabase db advisors --local --type security --level warn --fail-on error` | PASS, no issues |
+| Running local authenticated `/api/state` | PASS production workspace, configured=true, testMode=true, all four default methods and staff initiation capability |
+
+Staff registration, walk-in renewal and invoice checkout remain authorized; members can initiate their own invoice but not another member's. Unsupported methods remain rejected. Edge assertions confirm four enabled GCash/Maya/GrabPay/card choices for staff registration and member invoice payment, without granting either role administrator-only manual recording permissions. Webhook signatures, paid-event verification, exact amount/PHP/method verification, provider-ID uniqueness, replay prevention and atomic settlement continue to pass.
+
+The dedicated suite deletes only its generated fixtures and suppresses real SMTP. Final read-only SQL found zero remaining PayMongo fixture profiles, registrations or Auth accounts, confirmed the non-live checkout constraint, and verified that authenticated users cannot bind, review or settle payments while service_role can. No genuine PayMongo checkout or hosted webhook delivery was attempted; these results prove local behavior with a simulated provider, not merchant channel activation or external payment delivery. See [PAYMONGO_DEMO_REPORT.md](PAYMONGO_DEMO_REPORT.md) for the exact current file inventory and remaining hosted setup.
+
+
+## clark-changes pre-push verification - 2 October 2026
+
+The current intended working tree passed all requested checks before staging: `npm run check`, `npm run build`, `npm test` (25/25) and `npm run test:paymongo` (ten groups, successful exit and fixture cleanup). Checkout tests required no further fixes. Local Supabase security advisors reported no issues. Source scanning found no embedded PayMongo/webhook/Supabase service credentials in the 76 reviewed files; protected `.env.local` remained unchanged and private paths remained ignored. The exact 43-file inventory, Preview environment requirements and migration order are recorded in [PAYMONGO_DEMO_REPORT.md](PAYMONGO_DEMO_REPORT.md). The requested Git operation is a commit and push on `clark-changes` only; main, hosted schema and Production deployment are excluded.

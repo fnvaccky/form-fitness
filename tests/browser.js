@@ -16,11 +16,7 @@ const login=async a=>{await page.getByLabel('Email address',{exact:true}).fill(a
 await mkdir('test-results',{recursive:true});
 try{
  await page.goto(origin);await heading('Good to see you.');
- await page.getByRole('button',{name:'Create a member account',exact:true}).click();
- await page.getByLabel('Full name *',{exact:true}).fill('Browser Validation');await page.getByLabel('Email address *',{exact:true}).fill('browser-validation@example.invalid');await page.getByLabel('Create password *',{exact:true}).fill('BrowserValidation2026!');
- await page.getByRole('button',{name:'Continue',exact:true}).click();assert.equal(await page.locator('#phone').evaluate(el=>el.validity.valueMissing),true);
- await page.getByLabel('Mobile number *',{exact:true}).fill('12345');await page.getByRole('button',{name:'Continue',exact:true}).click();assert.match(await page.locator('#form-error').innerText(),/Mobile/);
- await page.getByLabel('Mobile number *',{exact:true}).fill('09171234567');await page.getByRole('button',{name:'Continue',exact:true}).click();await page.getByLabel('Membership start date *',{exact:true}).waitFor();await page.keyboard.press('Escape');pass('Registration cannot advance without valid contact details');
+ assert.equal(await page.getByRole('button',{name:'Create a member account',exact:true}).count(),0);pass('First registration is staff-assisted; public signup is unavailable');
  await page.getByRole('button',{name:'Forgot your password?',exact:true}).click();await page.getByLabel('Email address *',{exact:true}).waitFor();await page.keyboard.press('Escape');pass('Password recovery UI opens without sending mail to a test address');
  await login(memberAccount);await heading('Your next chapter, DEMO.');
  assert.equal(await page.getByRole('button',{name:'Admin view',exact:true}).count(),0);await page.screenshot({animations:'disabled',path:'test-results/member-desktop.png'});pass('Real customer login renders dashboard with no admin controls');

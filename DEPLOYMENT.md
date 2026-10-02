@@ -1,4 +1,6 @@
-# Private deployment and owner setup
+# Deployment and owner setup
+
+Current PayMongo demo instructions and verification are in [PAYMONGO_DEMO_REPORT.md](PAYMONGO_DEMO_REPORT.md), using https://repready-gym.vercel.app. The historical private FORM deployment evidence below describes a different deployment and must not be assumed to describe the current demo domain. No hosted settings were changed during the payment hardening pass.
 
 ## Verified target
 
@@ -51,7 +53,7 @@ Both email templates must therefore use `{{ .TokenHash }}`, not `{{ .Confirmatio
 
 Use `{{ .RedirectTo }}`, never `{{ .SiteURL }}`. `RedirectTo` carries the per-environment `APP_ORIGIN` the API supplied, so one template serves localhost, preview and production. `SiteURL` is a single fixed value and would send every environment's mail to the same host. Updating these templates is a prerequisite for the callback, not an optional step: a template still emitting `{{ .ConfirmationURL }}` produces a link the callback rejects.
 
-Admin invitations are unaffected. They never travel through Supabase mail — `POST /members` builds a one-time `#/set-password` link from `generateLink` for secure manual handoff.
+Current staff registration saves a pending record. After full verified payment, supported Auth account creation and Supabase recovery mail deliver the password setup link. No setup token is returned to staff. Public signup is disabled.
 
 ### Brevo SMTP
 
@@ -113,6 +115,42 @@ In FORM admin Settings > Payment QR codes, upload the owner's actual GCash and b
 - API 503: missing runtime variables or administrative key for invitations/mail.
 - API 403: wrong workspace/role or request origin; use the exact deployment hostname.
 - Setup link expired: generate a new one; never weaken Auth or RLS.
-- Demo registration/recovery denied: intentional; reset through the seed script.
+- Public demo signup/recovery denied: intentional; existing demo recovery uses the seed workflow. Staff-assisted paid-first registration is supported.
 - Camera unavailable: HTTPS and browser permission are required; use the image-upload fallback.
 - Notification unconfigured: configure server environment, not client-side Gmail fields.
+
+
+## RepReady automatic invitations and plan privileges
+
+The paid-first flow below supersedes registration-time invitations and manual setup-link handoff. The current setup mail uses `supabase/templates/recovery.html`, with selected plan, database privileges, dates and a set-password button. Setup tokens are never returned to staff or written to notification tables. Configure Supabase Auth SMTP and the exact APP_ORIGIN + `/api/auth/callback`; a successful provider request does not guarantee inbox delivery. No hosted configuration is automatically changed by editing this checkout.
+
+Local invitations use the configured template after `supabase stop` / `supabase start` (never use --no-backup or db reset to reload settings). Local emails are captured at http://localhost:54324, not delivered to real inboxes. The local callback is http://localhost:4173/api/auth/callback.
+
+Payment emails still use the server-side Gmail notification queue. They now include membership dates, plan privileges, a member-pass page link and payment instructions. Partial payments explicitly explain that full payment is required. Gmail sender configuration is independent of Supabase Auth SMTP. Demo PayMongo confirmation is implemented as described below; demo Gmail sends remain suppressed.
+
+Plan privileges come from ff_plans.features, which already exists in the database. Both registration and My membership use these values. Existing feature lists are the initial content; no machine-specific entitlements have been invented. Feature descriptions communicate entitlements, rather than enforcing physical equipment access.
+
+Verification: `npm run test:onboarding` uses the installed Edge browser and local Supabase only. It checks always-visible plan privileges, captured invitation content, the real setup link, password creation and unpaid-pass denial; its temporary member records are removed afterward. `npm run test:auth` now also refuses hosted projects because it sends invitation emails.
+
+
+## Paid-first onboarding (supersedes registration-time invitations)
+
+Apply `supabase/migrations/20261001184643_paid_first_registration.sql` to the target database before deploying this version. It adds `ff_registrations`, RLS-protected staff RPCs and a paid-registration branch in Auth provisioning. Existing members, invoices and payments are retained. The local database was updated using transactional SQL; the hosted project has not been changed. Review migration history before a local db push; do not replay this manually applied schema migration over existing objects.
+
+First registration is staff-assisted. POST /members saves pending details and a plan-price snapshot, with no Auth user or email. POST /registration-payment records the full verified cash amount in the pending registration, then creates a member account whose provisioning trigger atomically creates the paid cycle, invoice and one payment. Staff must verify the email address before cash confirmation. Cash payment is preserved if account creation fails; use the pending-registration completion action to retry without charging again. The completed account is emailed a password-setup link through Supabase Auth recovery mail. No permanent password or setup token is returned to staff. An uncertain email send requires delivery review before a manual retry.
+
+Install `supabase/templates/recovery.html` as the hosted Supabase Reset password template, configure Auth SMTP, and allow the exact APP_ORIGIN + `/api/auth/callback`. Disable public Auth signup in the hosted dashboard, matching local `[auth].enable_signup = false`. The app's public /signup endpoint is disabled, and the provisioning trigger rejects member data without a trusted workspace claim. Account setup uses the existing recovery callback without PKCE. Existing members can still recover passwords and sign in. Local recovery mail is captured at http://localhost:54324.
+
+Staff Renewals & payments offers Walk-in renewal: select an existing enabled member, select the next plan/start date, verify full cash, then atomically create and pay one cycle. Idempotent retries do not create another cycle or payment. The current cycle is preserved, overlapping dates are rejected, and the UI defaults to after the last cycle. Existing unpaid invoices can still be settled separately. Member My membership continues to create the next cycle/plan-change invoice for self-payment. Demo PayMongo uses automatic verified settlement; existing manual GCash/bank submissions still require administrator verification. Neither recurring charges nor prorated mid-cycle upgrades are introduced.
+
+Run `npm run test:onboarding`, `npm run test:registration` and `npm run test:auth` against the local stack. They use temporary fixture accounts/registrations and captured email, and clean up their fixtures. The first suite covers cash collection through the actual staff UI, emailed password setup, a paid live pass and future walk-in renewal; the resilience suite covers account collisions, durable payment and explicit email retries.
+
+## PayMongo demo e-wallet and card payments
+
+Use [PAYMONGO_DEMO_REPORT.md](PAYMONGO_DEMO_REPORT.md) as the current setup and verification guide. Apply missing dependencies in order, including `20261001213203_paymongo_demo_hardening.sql` and then the additive correction `20261002033541_paymongo_test_workspace.sql`. The correction removes the old demo-workspace restriction while retaining non-live checkout enforcement and all financial checks. Earlier migrations are unchanged. Only the local schema was updated; review and align migration history before a database push because local transactional SQL does not record migration versions automatically.
+
+PayMongo requires a test key, a webhook secret, at least one supported method and `PAYMONGO_ALLOW_LIVE=false`. TEST MODE means `sk_test_`; it works in either the production-named or demo workspace. Keep `APP_WORKSPACE` matching the existing accounts; do not change it to enable payments. Live keys, live requests and live resources are rejected. GCash, Maya, GrabPay and cards are rendered from the backend allowlist. The separate `initiateOnlinePayment` capability allows staff to start registration, walk-in renewal and invoice checkouts, and members to start their own invoice checkouts. Database role and ownership checks still authorize each transaction; settlement remains service-only. Cash and manual transfer submissions retain their existing workflow. No public PayMongo key is needed for hosted checkout.
+
+The supplied demo webhook is https://repready-gym.vercel.app/api/paymongo/webhook. An anonymous POST currently reaches the application and returns 503 with missing webhook configuration; it does not redirect to Vercel Authentication. The new local code is not deployed. Configure a TEST `checkout_session.payment.paid` webhook, server-only environment variables, Supabase recovery template and Auth callback before the developer deploys. Keep existing Deployment Protection settings; the report documents a private automation bypass only if protection later blocks POST requests.
+
+The integration uses one durable `ff_checkouts` record per open target, raw-body HMAC verification, exact test-mode PHP amount/source checks, unique provider IDs and atomic service-only database settlement. Browser returns never prove payment. Creation timeouts remain reviewable; administrators recover the existing session by its internal reference instead of creating another charge opportunity. Notifications follow successful settlement, and delivery failure never erases payment. Real provider checkout, webhook delivery and inbox receipt remain manual test steps.

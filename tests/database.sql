@@ -99,5 +99,64 @@ set local role authenticated;
 select pg_temp.ok((select count(*)=0 from public.ff_profiles),'Revoked session loses RLS access immediately');
 select pg_temp.must_fail($q$select public.ff_command('plans','{}')$q$,'Revoked session loses command access');
 reset role;
+-- Staff role: provisioning, read scope, and every permission boundary.
+create function pg_temp.fails_with(statement text,needle text,label text) returns void language plpgsql as $$
+declare msg text;
+begin
+ begin execute statement; msg:='(no error raised)';
+ exception when others then msg:=SQLERRM; end;
+ perform pg_temp.ok(msg like '%'||needle||'%',label);
+end $$;
+
+select set_config('ff.staff',jsonb_build_object('id',gen_random_uuid(),'session',gen_random_uuid())::text,true);
+insert into auth.users(id,email,raw_app_meta_data,raw_user_meta_data)
+ select (current_setting('ff.staff')::jsonb->>'id')::uuid,'ff-db-staff@example.invalid','{"ff_workspace":"demo","ff_role":"staff"}',
+ jsonb_build_object('form_fitness',true,'name','DB TEST Staff','phone','09170000005');
+insert into auth.sessions(id,user_id) select (current_setting('ff.staff')::jsonb->>'session')::uuid,(current_setting('ff.staff')::jsonb->>'id')::uuid;
+select pg_temp.ok((select role='staff' and workspace='demo' and enabled from public.ff_profiles where id=(current_setting('ff.staff')::jsonb->>'id')::uuid),'Trusted app_metadata provisions a staff profile');
+select pg_temp.ok((select count(*)=0 from public.ff_memberships where member_id=(current_setting('ff.staff')::jsonb->>'id')::uuid),'Staff provisioning creates no membership');
+select pg_temp.ok((select count(*)=0 from public.ff_invoices where member_id=(current_setting('ff.staff')::jsonb->>'id')::uuid),'Staff provisioning creates no invoice');
+
+-- user_metadata must never be able to claim the staff role.
+select set_config('ff.spoof',gen_random_uuid()::text,true);
+insert into auth.users(id,email,raw_app_meta_data,raw_user_meta_data)
+ select (current_setting('ff.spoof'))::uuid,'ff-db-spoof-staff@example.invalid','{"ff_workspace":"demo"}',
+ jsonb_build_object('form_fitness',true,'name','DB TEST Spoof','phone','09170000007','plan','basic','start',ff_private.today(),'ff_role','staff','role','staff');
+select pg_temp.ok((select role='member' from public.ff_profiles where id=(current_setting('ff.spoof'))::uuid),'user_metadata cannot claim the staff role');
+
+-- A clean member so the staff cash and renewal checks do not collide with earlier fixtures.
+select set_config('ff.cashmember',gen_random_uuid()::text,true);
+insert into auth.users(id,email,raw_app_meta_data,raw_user_meta_data)
+ select (current_setting('ff.cashmember'))::uuid,'ff-db-cash@example.invalid','{"ff_workspace":"demo"}',
+ jsonb_build_object('form_fitness',true,'name','DB TEST Cash','phone','09170000006','plan','basic','start',ff_private.today());
+select set_config('ff.cash_invoice',(select id::text from public.ff_invoices where member_id=(current_setting('ff.cashmember'))::uuid),true);
+select set_config('ff.renewstart',(ff_private.today()+40)::text,true);
+
+select set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('ff.staff')::jsonb->>'id','role','authenticated','session_id',current_setting('ff.staff')::jsonb->>'session')::text,true);
+set local role authenticated;
+select pg_temp.ok((select count(*)>1 from public.ff_profiles),'Staff reads the operational member roster');
+select pg_temp.ok((select count(*)>0 from public.ff_invoices),'Staff reads member invoices');
+select pg_temp.ok((select count(*)>0 from public.ff_memberships),'Staff reads memberships');
+select pg_temp.ok((select count(*)=0 from public.ff_notifications),'Staff cannot read the notification log');
+select pg_temp.fails_with($q$select public.ff_command('plans',jsonb_build_object('id','basic','name','Changed','priceCents',100,'available',true))$q$,'Administrator access is required','Staff cannot edit plan pricing');
+select pg_temp.fails_with($q$select public.ff_command('review-payment',jsonb_build_object('id',gen_random_uuid(),'approve',true,'verified',true))$q$,'Administrator access is required','Staff cannot approve or reject a submitted payment');
+select pg_temp.fails_with($q$select public.ff_command('manage-member',jsonb_build_object('id',gen_random_uuid(),'enabled',false))$q$,'Administrator access is required','Staff cannot enable or disable a member');
+select pg_temp.fails_with($q$select public.ff_command('settings/payments','{}')$q$,'Administrator access is required','Staff cannot change payment destinations');
+select pg_temp.fails_with($q$select public.ff_command('email-retry','{}')$q$,'Administrator access is required','Staff cannot administer notifications');
+select pg_temp.fails_with($q$select public.ff_command('profile',jsonb_build_object('name','x','email','ff-db-staff@example.invalid'))$q$,'Sign in as a member','Staff do not use the member profile command');
+select pg_temp.fails_with($q$select public.ff_command('scan',jsonb_build_object('token','FORM2.bogus.bogus'))$q$,'Invalid member pass','Staff reach the scanner and are stopped by the pass, not by permission');
+select pg_temp.fails_with($q$select public.ff_command('payments',jsonb_build_object('invoiceId',current_setting('ff.cash_invoice'),'amountCents',1000,'method','GCash','reference','STAFFTEST123456','verified',true,'idempotencyKey',gen_random_uuid()))$q$,'Only an administrator can record','Staff cannot record a GCash payment');
+select pg_temp.fails_with($q$select public.ff_command('payments',jsonb_build_object('invoiceId',current_setting('ff.cash_invoice'),'amountCents',1000,'method','Bank transfer','reference','STAFFTEST123457','verified',true,'idempotencyKey',gen_random_uuid()))$q$,'Only an administrator can record','Staff cannot record a bank transfer payment');
+select pg_temp.ok((public.ff_command('payments',jsonb_build_object('invoiceId',current_setting('ff.cash_invoice'),'amountCents',1000,'method','Cash','verified',true,'idempotencyKey',gen_random_uuid()))->>'payment') is not null,'Staff record a cash payment at the desk');
+select pg_temp.ok((public.ff_command('renew',jsonb_build_object('memberId',current_setting('ff.cashmember'),'plan','basic','start',current_setting('ff.renewstart')))->>'invoiceId') is not null,'Staff create a renewal invoice for a member');
+
+-- A member must not reach any front-desk action.
+select set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('ff.test')::jsonb->>'member','role','authenticated','session_id',current_setting('ff.test')::jsonb->>'memberSession')::text,true);
+set local role authenticated;
+select pg_temp.fails_with($q$select public.ff_command('scan',jsonb_build_object('token','FORM2.bogus.bogus'))$q$,'Gym staff access is required','A member cannot reach the scanner');
+select pg_temp.fails_with($q$select public.ff_command('check-in',jsonb_build_object('token','FORM2.bogus.bogus','confirmed',true))$q$,'Gym staff access is required','A member cannot record a check-in');
+select pg_temp.ok((select count(*)=0 from public.ff_profiles where role='staff'),'A member cannot see staff accounts in the roster');
+
+reset role;
 select count(*) as passed_checks,jsonb_agg(label) as checks from ff_test_log;
 rollback;

@@ -9,12 +9,15 @@
     "dev": "node --watch --env-file-if-exists=.env.local src/dev.js",
     "check": "node scripts/check.js",
     "build": "node build.cjs",
-    "test": "node --test tests/unit.test.js",
+    "test": "node --test tests/unit.test.js tests/paymongo-unit.test.js",
     "test:integration": "node --env-file-if-exists=.env.local tests/integration.js",
     "test:browser": "node --env-file-if-exists=.env.local tests/browser.js",
     "seed:demo": "node --env-file-if-exists=.env.local scripts/seed-demo.js",
     "package:source": "node scripts/package-source.js",
-    "test:auth": "node --env-file-if-exists=.env.local tests/auth.js"
+    "test:auth": "node --env-file-if-exists=.env.local tests/auth.js",
+    "test:onboarding": "node --env-file-if-exists=.env.local tests/onboarding.js",
+    "test:registration": "node --env-file-if-exists=.env.local tests/registration-resilience.js",
+    "test:paymongo": "node --env-file-if-exists=.env.local tests/paymongo.js"
   },
   "engines": {
     "node": ">=22"

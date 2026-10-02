@@ -15,4 +15,4 @@ http.createServer(async(req,res)=>{
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Cache-Control','no-store');
     res.end(await readFile(file));
   }catch{res.statusCode=404;res.end('Not found');}
-}).listen(port,'127.0.0.1',()=>console.log(`FORM Fitness development server: http://localhost:${port}`));
+}).listen(port,'127.0.0.1',()=>console.log(`RepReady development server: http://localhost:${port}`));

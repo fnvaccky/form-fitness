@@ -6,7 +6,7 @@ import {request} from 'playwright';
 import {handle} from '../src/api.js';
 import {serviceClient,result} from '../src/supabase.js';
 import {today} from '../src/validation.js';
-if(process.env.SUPABASE_URL!=='https://ivxbrhqqfgmhfpgpauzh.supabase.co')throw Error('Wrong project.');
+if(!['localhost','127.0.0.1'].includes(new URL(process.env.SUPABASE_URL).hostname))throw Error('Auth fixtures and invitation emails run only against a local stack.');
 const db=serviceClient();const created=[];const passed=[];let origin;
 const env={...process.env,APP_WORKSPACE:'production',GMAIL_ADDRESS:'',GMAIL_APP_PASSWORD:''};
 const server=http.createServer((req,res)=>handle(req,res,{...env,APP_ORIGIN:origin}));
@@ -33,12 +33,16 @@ try{
  const made=await db.auth.admin.createUser({email,password,email_confirm:true,app_metadata:{ff_workspace:'production',ff_role:'admin'},user_metadata:{form_fitness:true,name:'AUTH TEST Admin',phone:'09170000001'}});assert.equal(made.error,null);created.push(made.data.user.id);
  const profile=result(await db.from('ff_profiles').select('workspace,role').eq('id',made.data.user.id).single());assert.deepEqual(profile,{workspace:'production',role:'admin'});pass('Supported Auth createUser sees final trusted metadata through deferred provisioning');
  await call(admin,'/login',{email,password});
- for(const values of [{phone:''},{phone:'123'},{plan:'missing'}])await call(member,'/signup',{name:'AUTH TEST Signup',email:`form-verification-signup-${suffix}@example.invalid`,phone:'09170000003',password,plan:'basic',start:today(),...values},400);
+ for(const values of [{phone:''},{phone:'123'},{plan:'missing'}])await call(member,'/signup',{name:'AUTH TEST Signup',email:`form-verification-signup-${suffix}@example.invalid`,phone:'09170000003',password,plan:'basic',start:today(),...values},403);
  pass('Production signup endpoint rejects missing/invalid contacts and plan before sending mail');
  const memberEmail=`form-verification-member-${suffix}@example.invalid`;
- const invite=await call(admin,'/members',{name:'AUTH TEST Member',email:memberEmail,phone:'09170000002',plan:'basic',start:today()},201);created.push(invite.member.id);assert(invite.setupUrl);assert(!invite.password);
- const params=new URLSearchParams(invite.setupUrl.split('?')[1]);await call(member,'/auth/verify',{type:params.get('type'),tokenHash:params.get('token_hash')});
- await call(member,'/set-password',{newPassword:password});await call(member,'/logout',{});await call(member,'/login',{email:memberEmail,password});pass('Admin-created invitation, one-time verification, password setup and member login without email delivery');
+ const pending=await call(admin,'/members',{name:'AUTH TEST Member',email:memberEmail,phone:'09170000002',plan:'basic',start:today(),requestId:randomUUID()},201);
+ assert.equal(pending.accountReady,false);assert.equal(pending.invitationSent,false);
+ const paid=await call(admin,'/registration-payment',{id:pending.registration.id,amount:pending.registration.amount_cents/100,method:'Cash',verified:true,emailConfirmed:true,idempotencyKey:randomUUID()});
+ assert.equal(paid.accountReady,true);assert.equal(paid.invitationSent,true);created.push(paid.registration.member_id);
+ const setup=await db.auth.admin.generateLink({type:'recovery',email:memberEmail});assert.equal(setup.error,null);const params=new URLSearchParams({type:'recovery',token_hash:setup.data.properties.hashed_token});
+ await call(member,'/auth/verify',{type:params.get('type'),tokenHash:params.get('token_hash')});
+ await call(member,'/set-password',{newPassword:password});await call(member,'/logout',{});await call(member,'/login',{email:memberEmail,password});pass('First payment creates the account and sends setup email');
  await call(member,'/auth/verify',{type:params.get('type'),tokenHash:params.get('token_hash')},400);pass('Invitation token cannot be reused');
  await call(member,'/logout',{});
  const recovery=await db.auth.admin.generateLink({type:'recovery',email:memberEmail});assert.equal(recovery.error,null);
@@ -61,26 +65,16 @@ try{
  assert.equal(replayed.status,400);assert.match(replayed.headers.get('content-type'),/text\/html/);
  assert.doesNotMatch(await replayed.text(),new RegExp(mailedHash.slice(0,12)),'The page must never echo the token.');
  pass('A reused confirmation link is refused with an HTML page, never a JSON body');
- // Signup confirmation already has a password, so it must land signed in, not on the setup form.
- const confirmEmail=`form-verification-confirm-${suffix}@example.invalid`;
- const signupLink=await db.auth.admin.generateLink({type:'signup',email:confirmEmail,password,
-  options:{data:{form_fitness:true,name:'AUTH TEST Confirm',phone:'09170000004',plan:'basic',start:today(),goal:'Improve fitness'}}});
- assert.equal(signupLink.error,null);created.push(signupLink.data.user.id);
- const confirmClient=mailClient();
- const confirmed=await confirmClient.open('signup',signupLink.data.properties.hashed_token);
- assert.equal(confirmed.status,303);assert.equal(confirmed.headers.get('location'),origin+'/');
- assert(hasSessionCookie(confirmed),'Signup confirmation must issue an HttpOnly session cookie.');
- const confirmedSession=await (await confirmClient.get('/session')).json();
- assert.equal(confirmedSession.user.email,confirmEmail);assert.equal(confirmedSession.user.role,'member');
- pass('Signup confirmation lands on the dashboard with a live session, not the password setup form');
- const rejected=await confirmClient.open('bogus','irrelevant');
+ // Public signup no longer provisions first memberships. Existing callback types remain supported.
+ const rejected=await recoveryClient.open('bogus','irrelevant');
  assert.equal(rejected.status,400);assert.match(rejected.headers.get('content-type'),/text\/html/);
  pass('An unsupported confirmation type is refused before any Supabase call');
  await call(admin,'/logout',{});
 }finally{
  await admin.dispose();await member.dispose();server.close();
  for(const id of created.reverse()){
-  for(const table of ['ff_notifications','ff_invoices','ff_memberships'])result(await db.from(table).delete().eq('member_id',id));
+  result(await db.from('ff_registrations').delete().eq('member_id',id));
+  for(const table of ['ff_checkins','ff_submissions','ff_payments','ff_notifications','ff_invoices','ff_memberships'])result(await db.from(table).delete().eq('member_id',id));
   result(await db.from('ff_profiles').delete().eq('id',id));
   const {error}=await db.auth.admin.deleteUser(id);if(error)throw Error('Test Auth cleanup failed.');
  }

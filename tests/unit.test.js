@@ -137,3 +137,133 @@ test('email confirmation callback verifies token_hash without PKCE and routes by
     }
   }finally{server.close();supabase.close();}
 });
+
+test('role capabilities are explicit and default-deny',async()=>{
+  const {capabilitiesFor,userView}=await import('../src/state.js');
+  const admin=capabilitiesFor('admin'),staff=capabilitiesFor('staff'),member=capabilitiesFor('member');
+  for(const grant of ['roster','addMember','renew','recordCashPayment','initiateOnlinePayment','scan'])assert.equal(staff[grant],true,'staff should have '+grant);
+  for(const deny of ['recordOnlinePayment','reviewPayment','manageMember','plans','paymentSettings','systemSettings'])assert.notEqual(staff[deny],true,'staff must not have '+deny);
+  for(const grant of ['reviewPayment','plans','paymentSettings','systemSettings','manageMember','recordOnlinePayment'])assert.equal(admin[grant],true,'admin should have '+grant);
+  assert.equal(admin.initiateOnlinePayment,true);
+  assert.deepEqual(member,{initiateOnlinePayment:true},'a member can start an owned checkout, with no console capabilities');
+  assert.deepEqual(capabilitiesFor('unknown-role'),{},'an unknown role is denied everything');
+  assert.equal(staff.somethingNeverDefined,undefined,'an undeclared capability is never truthy');
+  assert.deepEqual(userView({id:'x',role:'staff',name:'S',email:'s@example.invalid',workspace:'production'}).can,staff);
+});
+
+// A fake GoTrue/PostgREST pair so the real handler runs its authorization gate offline.
+function fakeSupabase(state){
+  return http.createServer(async(req,res)=>{
+    let raw='';for await(const chunk of req)raw+=chunk;
+    const url=new URL(req.url,'http://localhost');
+    state.requests.push({method:req.method,path:url.pathname,body:raw?JSON.parse(raw):null});
+    res.setHeader('Content-Type','application/json');
+    if(url.pathname==='/auth/v1/verify')return res.end(JSON.stringify(state.session));
+    if(url.pathname==='/auth/v1/user')return res.end(JSON.stringify(state.session.user));
+    if(url.pathname==='/rest/v1/ff_profiles')return res.end(JSON.stringify([state.profile]));
+    if(url.pathname==='/rest/v1/ff_plans')return res.end(JSON.stringify([{id:'basic',name:'Essential',days:30,features:['All strength equipment']}]));
+    if(url.pathname==='/auth/v1/invite')return res.end(JSON.stringify({action_link:'https://example.invalid/link',email_otp:'',hashed_token:'fake-hash',redirect_to:'',verification_type:'invite',id:'99999999-0000-0000-0000-000000000000',email:'new-member@example.invalid',aud:'authenticated',app_metadata:{},user_metadata:{},created_at:new Date().toISOString()}));
+    if(url.pathname==='/rest/v1/rpc/ff_registration')return res.end(JSON.stringify({id:'99999999-0000-0000-0000-000000000001',status:'awaiting_payment',...JSON.parse(raw).body}));
+    if(url.pathname==='/rest/v1/rpc/ff_command')return res.end(JSON.stringify({ok:true}));
+    res.statusCode=404;return res.end('{}');
+  });
+}
+async function consoleSession(role){
+  const userId=`11111111-2222-3333-4444-55555555550${role==='admin'?1:role==='staff'?2:3}`;
+  const encode=value=>Buffer.from(JSON.stringify(value)).toString('base64url');
+  const expires=Math.floor(Date.now()/1000)+3600;
+  const accessToken=`${encode({alg:'HS256',typ:'JWT'})}.${encode({sub:userId,aud:'authenticated',exp:expires,session_id:'66666666-7777-8888-9999-000000000000'})}.signature`;
+  const user={id:userId,aud:'authenticated',role:'authenticated',email:`${role}@example.invalid`,app_metadata:{},user_metadata:{},created_at:new Date().toISOString()};
+  const state={requests:[],session:{access_token:accessToken,token_type:'bearer',expires_in:3600,expires_at:expires,refresh_token:'fake-refresh',user},
+    profile:{id:userId,workspace:'production',role,name:`Test ${role}`,email:user.email,phone:'09170000001',enabled:true,goal:'',photo:'',created_at:new Date().toISOString()}};
+  const supabase=fakeSupabase(state);
+  await new Promise(resolve=>supabase.listen(0,'127.0.0.1',resolve));
+  let origin='';
+  const api=http.createServer((req,res)=>handle(req,res,{SUPABASE_URL:`http://127.0.0.1:${supabase.address().port}`,SUPABASE_PUBLISHABLE_KEY:'publishable',SUPABASE_SECRET_KEY:'secret',APP_ORIGIN:origin,APP_WORKSPACE:'production'}));
+  await new Promise(resolve=>api.listen(0,'127.0.0.1',resolve));
+  origin=`http://127.0.0.1:${api.address().port}`;
+  const landing=await fetch(`${origin}/api/auth/callback?token_hash=seed&type=signup`,{redirect:'manual'});
+  const cookie=landing.headers.getSetCookie().map(value=>value.split(';')[0]).join('; ');
+  return {origin,state,
+    post:(path,body)=>fetch(origin+'/api'+path,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookie},body:JSON.stringify(body||{})}),
+    close(){api.close();supabase.close();}};
+}
+
+test('API authorization gate matches the staff permission matrix',async()=>{
+  const staff=await consoleSession('staff');
+  try{
+    for(const path of ['/plans','/review-payment','/settings/payments','/settings/email','/manage-member','/email-retry']){
+      const response=await staff.post(path,{});
+      assert.equal(response.status,403,`staff must be refused ${path}`);
+      assert.match((await response.json()).error,/Administrator access is required/,path);
+    }
+    for(const path of ['/scan','/check-in','/payments','/renew'])
+      assert.notEqual((await staff.post(path,{})).status,403,`staff must pass the gate for ${path}`);
+  }finally{staff.close();}
+});
+
+test('members and administrators keep their existing access',async()=>{
+  const member=await consoleSession('member');
+  try{
+    for(const path of ['/scan','/check-in','/payments','/members']){
+      const response=await member.post(path,{});
+      assert.equal(response.status,403,`a member must be refused ${path}`);
+      assert.match((await response.json()).error,/Gym staff access is required/,path);
+    }
+    for(const path of ['/plans','/review-payment','/manage-member']){
+      const response=await member.post(path,{});
+      assert.equal(response.status,403,path);
+      assert.match((await response.json()).error,/Administrator access is required/,path);
+    }
+  }finally{member.close();}
+  const admin=await consoleSession('admin');
+  try{
+    for(const path of ['/plans','/review-payment','/settings/payments','/manage-member','/email-retry','/scan','/check-in','/payments','/members'])
+      assert.notEqual((await admin.post(path,{})).status,403,`an administrator must keep ${path}`);
+  }finally{admin.close();}
+});
+
+test('staff registration saves pending details without an Auth account or email',async()=>{
+ const staff=await consoleSession('staff');
+ try{
+  const start=new Date(Date.now()+8*3600000).toISOString().slice(0,10);
+  const base={name:'New Member',email:'new-member@example.invalid',phone:'09170000009',plan:'basic',start,goal:'Improve fitness',requestId:'99999999-0000-0000-0000-000000000009'};
+  const response=await staff.post('/members',base);assert.equal(response.status,201);const value=await response.json();assert.equal(value.accountReady,false);assert.equal(value.invitationSent,false);assert.equal(value.registration.status,'awaiting_payment');
+  const call=staff.state.requests.find(entry=>entry.path==='/rest/v1/rpc/ff_registration');assert.equal(call.body.action,'create');
+  assert.equal(staff.state.requests.some(entry=>entry.path==='/auth/v1/invite'||entry.path==='/auth/v1/admin/users'),false);
+  for(const escalation of [{role:'admin'},{ff_role:'staff'},{workspace:'demo'},{app_metadata:{ff_role:'admin'}}])assert.equal((await staff.post('/members',{...base,...escalation})).status,400);
+  assert.equal((await staff.post('/signup',base)).status,403);
+ }finally{staff.close();}
+});
+
+test('the staff shell relabels the admin console without changing its markup',async()=>{
+  const {readFile}=await import('node:fs/promises');
+  const app=await readFile('public/app.js','utf8'),connected=await readFile('public/connected.js','utf8');
+  // The override is a monkey patch over app.js output, so it breaks silently if app.js is reworded.
+  for(const source of ["'Gym Admin'","'Gym administrator'","'Admin workspace'",'>Admin view</button>'])
+    assert(app.includes(source),`app.js must still emit ${source}, or the staff label override is stale`);
+  const block=connected.slice(connected.indexOf("if(currentUser?.role==='staff')"));
+  const pairs=[...block.slice(0,block.indexOf(';')).matchAll(/\.replace\('([^']*)','([^']*)'\)/g)].map(m=>[m[1],m[2]]);
+  assert.equal(pairs.length,4,'expected exactly four label replacements');
+  const admin='<span class="avatar ">GA</span><div><strong>Gym administrator</strong><small>Admin workspace</small></div>'+
+    '<div class="mode-switch"><button data-action="mode" data-mode="admin" class="active" aria-pressed="true">Admin view</button>'+
+    '<button data-action="mode" data-mode="member" class="" aria-pressed="false">Member view</button></div>';
+  let staff=admin;
+  for(const [from,to] of pairs){assert(staff.includes(from),`the admin shell must contain ${from}`);staff=staff.replace(from,to);}
+  for(const label of ['>GS</span>','<strong>Gym staff</strong>','<small>Staff workspace</small>','>Staff view</button>'])
+    assert(staff.includes(label),`the staff shell must contain ${label}`);
+  for(const label of ['Gym administrator','Admin workspace','>Admin view<','>GA</span>'])
+    assert(!staff.includes(label),`the staff shell must not contain ${label}`);
+  assert.equal((staff.match(/</g)||[]).length,(admin.match(/</g)||[]).length,'tag count must be identical');
+  assert.equal((staff.match(/class="[^"]*"/g)||[]).join('|'),(admin.match(/class="[^"]*"/g)||[]).join('|'),'class attributes must be identical');
+  assert.equal(staff.length,admin.length-8,'only label text changed (Gym administrator -> Gym staff)');
+});
+
+test('payment email distinguishes partial balances from pass eligibility',async()=>{
+ const {paymentEmail}=await import('../src/notifications.js');
+ const cycle={start_date:'2026-10-02',end_date:'2026-10-31'},plan={name:'Essential',features:['All strength equipment','Locker room access']};
+ const partial=paymentEmail('Payment confirmed',{amount_cents:89900,paid_cents:10000},cycle,plan,'http://localhost:4173');
+ assert.match(partial,/Remaining balance: PHP 799.00/);assert.match(partial,/Full payment is required/);assert.match(partial,/All strength equipment/);
+ const full=paymentEmail('Payment confirmed',{amount_cents:89900,paid_cents:89900},cycle,plan,'http://localhost:4173');
+ assert.match(full,/fully paid/);assert.match(full,/during the membership dates/);assert.match(full,/http:\/\/localhost:4173\/#\/member\/overview/);assert.doesNotMatch(full,/Remaining balance/);
+});

@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { serverClient, serviceClient, configuration, result } from './supabase.js';
 import { HttpError, fail, contacts, password, startDate, cents, imageData, today } from './validation.js';
 import { BUCKET, stateFor, planView, paymentView, userView, signedImage } from './state.js';
+import { fulfillRegistration } from './onboarding.js';
+import {createCheckout,reconcileCheckout,recoverCheckout,handleWebhook} from './paymongo.js';
 import { flushEmails } from './notifications.js';
 
 function send(res, status, data) { res.statusCode=status; res.end(JSON.stringify(data)); }
@@ -14,7 +16,7 @@ const CONFIRMATION_TYPES = { signup:'/', email:'/', recovery:'/#/set-password', 
 function confirmationPage(res, origin, status, title, detail) {
   res.statusCode=status;
   res.setHeader('Content-Type','text/html; charset=utf-8');
-  return res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow"><title>FORM Fitness</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#143d32;color:#f4f6f5;font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:26rem;padding:2rem;text-align:center}h1{font-size:1.35rem;margin:0 0 .75rem}p{margin:0 0 1.5rem;opacity:.85}a{display:inline-block;padding:.7rem 1.4rem;border-radius:999px;background:#f4f6f5;color:#143d32;text-decoration:none;font-weight:600}</style></head><body><main><h1>${title}</h1><p>${detail}</p><a href="${origin}/">Return to FORM Fitness</a></main></body></html>`);
+  return res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow"><title>RepReady</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#143d32;color:#f4f6f5;font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:26rem;padding:2rem;text-align:center}h1{font-size:1.35rem;margin:0 0 .75rem}p{margin:0 0 1.5rem;opacity:.85}a{display:inline-block;padding:.7rem 1.4rem;border-radius:999px;background:#f4f6f5;color:#143d32;text-decoration:none;font-weight:600}</style></head><body><main><h1>${title}</h1><p>${detail}</p><a href="${origin}/">Return to RepReady</a></main></body></html>`);
 }
 async function readBody(req) {
   if (!req.headers['content-type']?.includes('application/json')) fail('Use a JSON request.',415);
@@ -50,6 +52,7 @@ export async function handle(req,res,env=process.env) {
     const {origin,workspace}=configuration(env);
     const url=new URL(req.url,origin);
     const path=url.pathname==='/api'&&url.searchParams.has('__path')?'/'+url.searchParams.get('__path'):url.pathname.replace(/^\/api/,'')||'/';
+    if(path==='/paymongo/webhook')return await handleWebhook(req,res,env,origin);
     if (!['GET','POST'].includes(req.method)) fail('Method not allowed.',405);
     if (req.method==='POST' && req.headers.origin!==origin) fail('Request origin is not allowed.',403);
     const body=req.method==='POST'?await readBody(req):{};
@@ -64,14 +67,7 @@ export async function handle(req,res,env=process.env) {
       const {error}=await client.auth.signOut({scope:'local'}); if(error && error.status!==403) fail('Sign out could not be confirmed. Try again.',502);
       return send(res,200,{ok:true});
     }
-    if (path==='/signup' && req.method==='POST') {
-      if(workspace==='demo') fail('Demo registration is disabled. Use the isolated demo setup script.',403);
-      const info=contacts(body);password(body.password);startDate(body.start);
-      const plans=result(await client.rpc('ff_public_plans')); if(!plans.some(p=>p.id===body.plan&&p.available))fail('Select an available membership plan.');
-      const {data,error}=await client.auth.signUp({email:info.email,password:body.password,options:{emailRedirectTo:origin+'/api/auth/callback',data:{...info,form_fitness:true,plan:body.plan,start:body.start,goal:body.goal}}});
-      if(error) fail(error.status===429?'Too many attempts. Try again later.':'Registration could not be completed. Check the details or try signing in.',error.status===429?429:400);
-      return send(res,201,{memberId:data.user?.id,requiresEmailConfirmation:!data.session});
-    }
+    if (path==='/signup' && req.method==='POST') fail('First membership registration and payment are handled at the gym. Sign in to renew an existing membership.',403);
     if (path==='/recovery' && req.method==='POST') {
       if(workspace==='demo') fail('Reset demo credentials using the secure local seed script.',403);
       const email=String(body.email||'').trim();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))fail('Enter a valid email address.');
@@ -108,20 +104,54 @@ export async function handle(req,res,env=process.env) {
     if(path==='/session' && req.method==='GET')return send(res,200,{user:profile?userView(profile):null,canOwnerLogin:false,date:today()});
     if(!profile)fail('Please sign in to an authorized account for this workspace.',401);
     const admin=()=>{if(profile.role!=='admin')fail('Administrator access is required.',403);};
-    if(['/members','/payments','/review-payment','/scan','/check-in','/settings/payments','/settings/email','/plans','/manage-member','/email-retry'].includes(path))admin();
+    const gymStaff=()=>{if(!['admin','staff'].includes(profile.role))fail('Gym staff access is required.',403);};
+    // These two lists mirror the gate inside ff_private.command; edit them together.
+    if(['/review-payment','/settings/payments','/settings/email','/plans','/manage-member','/email-retry'].includes(path))admin();
+    if(['/members','/registration-payment','/registration-fulfill','/walkin-renew','/payments','/scan','/check-in'].includes(path))gymStaff();
     if(path==='/login')return send(res,200,{ok:true,user:userView(profile)});
     if(path==='/state' && req.method==='GET')return send(res,200,await stateFor(client,profile,env));
     if(path==='/qr' && req.method==='GET')return send(res,200,await rpc('qr'));
     if(req.method!=='POST')fail('Endpoint not found.',404);
+    if(path==='/paymongo/checkout')return send(res,200,await createCheckout(client,body,env,origin));
+    if(path==='/paymongo/status' || path==='/paymongo/recover'){
+      if(path==='/paymongo/recover')admin();
+      let checkout=result(await client.from('ff_checkouts').select('*').eq('id',body.id).maybeSingle());
+      if(!checkout)fail('Checkout not found.',404);
+      if(path==='/paymongo/recover'){
+        return send(res,200,await recoverCheckout(checkout,body.sessionId,env,origin));
+      }
+      return send(res,200,await reconcileCheckout(checkout,env,origin));
+    }
     if(path==='/members') {
-      admin();if(workspace==='demo')fail('Add demo accounts using the local demo setup script. No invitations are sent in demo mode.',403);
+      // Save contact and plan details first. Trusted member provisioning follows full payment.
+      gymStaff();
+      // Defence in depth. The metadata below is already a fixed allowlist, so no request field can
+      // reach app_metadata, but refuse an attempt outright rather than silently discarding it.
+      for(const key of ['role','ff_role','ff_workspace','workspace','app_metadata','app_meta_data'])
+        if(key in body)fail('Accounts created here are always members. Remove the role field and try again.');
       const info=contacts(body);startDate(body.start);
-      const plan=result(await client.from('ff_plans').select('id').eq('id',body.plan).eq('available',true).maybeSingle());if(!plan)fail('Select an available membership plan.');
-      const {data,error}=await serviceClient(env).auth.admin.generateLink({type:'invite',email:info.email,options:{data:{...info,form_fitness:true,plan:body.plan,start:body.start,goal:body.goal},redirectTo:origin}});
-      if(error)fail('Account invitation could not be created. The address may already be registered.',409);
-      const setupUrl=origin+'/#/set-password?type=invite&token_hash='+encodeURIComponent(data.properties.hashed_token);
-      // Return once to authorized staff for secure handoff. Never logged or stored in public tables.
-      return send(res,201,{member:{id:data.user.id},setupUrl,message:'Share this one-time setup link securely with the member. No permanent password was created or exposed.'});
+      const registration=result(await client.rpc('ff_registration',{action:'create',body:{...info,goal:body.goal,plan:body.plan,start:body.start,requestId:body.requestId}}));
+      return send(res,201,{registration,accountReady:false,invitationSent:false});
+    }
+    if(path==='/registration-payment' || path==='/registration-fulfill') {
+      gymStaff();
+      if(body.retryEmail && body.emailChecked!==true)fail('Check delivery before resending a setup email.');
+      const action=path==='/registration-payment'?'cash':'get';
+      const request=action==='cash'?{...body,amountCents:cents(body.amount)}:body;
+      const registration=result(await client.rpc('ff_registration',{action,body:request}));
+      if(!['paid','provisioned'].includes(registration.status))fail('Confirm the first payment before creating an account.');
+      let outcome;
+      try { outcome=await fulfillRegistration(registration,env,origin,{retryEmail:body.retryEmail===true}); }
+      catch { outcome={registration,accountReady:!!registration.member_id,invitationSent:false,message:'Payment recorded. Account/email completion needs retry; do not collect payment again.'}; }
+      if(env.GMAIL_ADDRESS&&env.GMAIL_APP_PASSWORD)await flushEmails(env).catch(()=>{});
+      return send(res,200,outcome);
+    }
+    if(path==='/walkin-renew') {
+      gymStaff();startDate(body.start);
+      const data=result(await client.rpc('ff_walkin_renew',{body:{...body,amountCents:cents(body.amount)}}));
+      data.payment=paymentView(data.payment);
+      if(env.GMAIL_ADDRESS&&env.GMAIL_APP_PASSWORD)await flushEmails(env).catch(()=>{});
+      return send(res,200,data);
     }
     if(path==='/password' || path==='/set-password') {
       password(body.newPassword);
