@@ -7,10 +7,11 @@ function paymentChannels(id,cash=true,authorized=can('initiateOnlinePayment')){
  const names={gcash:'GCash',paymaya:'Maya',grab_pay:'GrabPay',card:'Credit / debit card'},enabled=(state.paymongo?.methods||[]).filter(x=>names[x]);
  return `<div class="field"><label for="${id}">Payment method *</label><select id="${id}" required>${cash?'<optgroup label="Cash / Manual payment"><option value="cash">Cash at the desk</option></optgroup>':''}<optgroup label="Pay online (TEST MODE)">${enabled.map(x=>`<option value="${x}" ${state.paymongo?.configured&&authorized?'':'disabled'}>${names[x]}</option>`).join('')}</optgroup></select></div><p class="auth-help online-payment-help">PayMongo test checkout uses simulated payments. No real money is collected.${!authorized?' This transaction is not authorized for your account.':state.paymongo?.configured?'':' Online checkout is awaiting test configuration.'}</p>`;
 }
-let paymongoStarting=false;
+let paymongoStarting=false,paymongoSafetyTimer=null;
 function validPaymongoUrl(value){try{const url=new URL(value);return url.protocol==='https:'&&url.hostname==='checkout.paymongo.com'&&!url.username&&!url.password&&!url.port;}catch{return false;}}
 // A cancelled checkout navigation or a Back/bfcache return must leave online payment usable again.
 function resetPaymongoStart(){
+ clearTimeout(paymongoSafetyTimer);paymongoSafetyTimer=null;
  paymongoStarting=false;
  document.querySelectorAll('form[data-redirecting],form[data-submitting]').forEach(form=>{delete form.dataset.redirecting;delete form.dataset.submitting;const button=document.querySelector(`button[form="${form.id}"]`)||form.querySelector('[type="submit"]');if(button)button.disabled=false;});
 }
@@ -20,12 +21,13 @@ async function startPaymongo(body,form){
  const target=body.kind==='invoice'?state.invoices.find(i=>i.id===body.invoiceId):{memberId:body.memberId};
  if(!canInitiatePaymongo(body.kind,target))throw Error('This online payment is not authorized for your account.');
  paymongoStarting=true;let redirecting=false;
+ clearTimeout(paymongoSafetyTimer);paymongoSafetyTimer=null;
  try{
   const response=await api('/paymongo/checkout',{...body,requestId:paymentIntent}),checkout=response.checkout;
   if(checkout.status==='pending'&&!checkout.reviewReason&&validPaymongoUrl(checkout.url)){
    if(form)form.dataset.redirecting='true';
    window.location.assign(checkout.url);redirecting=true;
-   setTimeout(()=>{if(document.visibilityState==='visible')resetPaymongoStart();},10000);
+   paymongoSafetyTimer=setTimeout(()=>{if(document.visibilityState==='visible')resetPaymongoStart();},10000);
    return;
   }
   await refreshData();showPaymongo(checkout);

@@ -337,7 +337,7 @@ async function paymongoSandbox(forms){
   window:{addEventListener:(type,fn)=>{listeners[type]=fn;},location:{assign:url=>assigned.push(url)}},
   document:{visibilityState:'visible',querySelector:selector=>selector==='.modal form'?firstModalForm:selector.startsWith('button[form=')?button:null,
    querySelectorAll:()=>forms.filter(form=>form.dataset.redirecting||form.dataset.submitting)},
-  setTimeout:(fn,ms)=>{timers.push({fn,ms});}};
+  setTimeout:(fn,ms)=>timers.push({fn,ms,cleared:false}),clearTimeout:id=>{if(timers[id-1])timers[id-1].cleared=true;}};
  vm.runInNewContext(await readFile('public/paymongo.js','utf8'),sandbox);
  const start=form=>sandbox.startPaymongo({kind:'invoice',invoiceId:'inv-1',method:'gcash'},form);
  return {sandbox,button,firstModalForm,listeners,timers,assigned,start,apiCalls:()=>apiCalls};
@@ -366,6 +366,32 @@ test('the in-flight safety reset fires after about 10 s and only while the page 
  assert.equal(p.apiCalls(),1,'a hidden page (navigation committed) stays locked');
  p.sandbox.document.visibilityState='visible';timer.fn();await p.start(form);
  assert.equal(p.apiCalls(),2,'a page still visible after ~10 s is re-armed');
+});
+
+test('a stale safety timer is cleared, so it cannot re-arm a newer checkout attempt',async()=>{
+ const form={id:'payment-form',dataset:{},querySelector:()=>null},p=await paymongoSandbox([form]);
+ await p.start(form);
+ const stale=p.timers.at(-1);
+ // The page is frozen in the back/forward cache with this timer pending, then restored.
+ p.listeners.pageshow({persisted:true});
+ assert.equal(stale.cleared,true,'returning to the page clears the pending safety timer');
+ await p.start(form);
+ assert.equal(p.apiCalls(),2);
+ // A browser never runs a cleared timer; an uncleared one would fire now and unlock attempt 2 early.
+ if(!stale.cleared)stale.fn();
+ await p.start(form);
+ assert.equal(p.apiCalls(),2,'the second attempt stays locked');
+});
+
+test('starting a new checkout attempt clears any safety timer still pending',async()=>{
+ const vm=await import('node:vm');
+ const form={id:'payment-form',dataset:{},querySelector:()=>null},p=await paymongoSandbox([form]);
+ await p.start(form);
+ const pending=p.timers.at(-1);
+ // Simulates any path that re-arms checkout without resetPaymongoStart().
+ vm.runInContext('paymongoStarting=false',p.sandbox);
+ await p.start(form);
+ assert.equal(pending.cleared,true,'a new attempt clears the previous attempt\'s timer');
 });
 
 test('checkout marks the form that was submitted, not the first form in the modal',async()=>{
