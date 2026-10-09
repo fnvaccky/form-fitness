@@ -218,7 +218,7 @@ The main argument for `main` is that it can take real payments today, with expli
 Updated 10 October 2026. The branch `merge/option-a` implements Option A **steps 3–5**:
 
 - **Step 3:** `origin/main` is merged with a normal merge commit, so both histories are intact. Conflicts and broken auto-merges are resolved as described in section 2 and in the merge commit message.
-- **Step 4:** `main`'s two migration files are kept byte-for-byte at their original paths.
+- **Step 4:** `main`'s two migration files are kept byte-for-byte. Their content is unchanged, but since `f622a83` they carry the versions the live project actually recorded for them: `20261001150532_paymongo_checkout.sql` and `20261001150805_paymongo_notification_permission.sql`. The live-only `20260919044433_repready_branding.sql` was added alongside them, so local and live migration history match.
 - **Step 5:** `supabase/migrations/20261010120000_retire_main_paymongo.sql` retires `main`'s design. It revokes the two retired functions and all writes to `ff_paymongo_attempts`, and keeps every historical row.
 
 Steps **1, 2, 6 and 7 remain for the owner:**
