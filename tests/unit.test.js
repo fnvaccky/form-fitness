@@ -391,3 +391,15 @@ test('"Already recorded" uses the existing amber badge colours, not the Active g
  const declarations=css=>Object.fromEntries(css.split(';').filter(Boolean).map(d=>d.split(':')));
  assert.deepEqual(declarations(rule),declarations(amber));
 });
+
+test('the hosted pre-flight script is one read-only transaction of SELECT statements',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const sql=await readFile('scripts/hosted-preflight.sql','utf8');
+ assert.match(sql,/do not run against production without the owner/i);
+ const statements=sql.replace(/--.*$/gm,'').split(';').map(s=>s.trim().replace(/\s+/g,' ').toLowerCase()).filter(Boolean);
+ assert.deepEqual(statements.slice(0,2),['begin','set transaction read only']);
+ assert.equal(statements.at(-1),'rollback');
+ const body=statements.slice(2,-1);
+ assert(body.length>=6,'expected a SELECT for each report section');
+ for(const statement of body)assert.match(statement,/^select\b/,`not a SELECT: ${statement.slice(0,60)}`);
+});
