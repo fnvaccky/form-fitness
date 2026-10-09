@@ -58,6 +58,63 @@ test('API rejects missing configuration, wrong origins and malformed bodies with
   }finally{server.close();}
 });
 
+test('a mismatched origin is still refused with 403 and told which address to open',async()=>{
+  const env={SUPABASE_URL:'https://example.supabase.co',SUPABASE_PUBLISHABLE_KEY:'publishable-placeholder',APP_ORIGIN:'http://localhost:4173'};
+  const server=http.createServer((req,res)=>handle(req,res,env));
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const base=`http://127.0.0.1:${server.address().port}`;
+  const recover=(origin,email)=>fetch(base+'/api/recovery',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({email})});
+  try{
+    // 127.0.0.1 vs localhost, another port, and another Vercel alias are all different origins.
+    for(const origin of ['http://127.0.0.1:4173','http://localhost:4174','https://repready-abc123.vercel.app']){
+      const response=await recover(origin,'member@example.test');
+      assert.equal(response.status,403,origin);
+      assert.equal((await response.json()).error,'This page was opened from a different address than the app expects. Open http://localhost:4173 and try again.');
+    }
+    // The exact origin passes the check and reaches the route's own validation (no Supabase call).
+    const matching=await recover(env.APP_ORIGIN,'not-an-email');
+    assert.equal(matching.status,400);
+    assert.equal((await matching.json()).error,'Enter a valid email address.');
+  }finally{server.close();}
+});
+
+test('on Vercel without APP_ORIGIN, the VERCEL_URL fallback is logged once',async()=>{
+  const {configuration}=await import('../src/supabase.js');
+  const warnings=[],original=console.warn;console.warn=message=>warnings.push(String(message));
+  try{
+    const env={SUPABASE_URL:'https://example.supabase.co',SUPABASE_PUBLISHABLE_KEY:'publishable',VERCEL:'1',VERCEL_URL:'repready-abc123.vercel.app'};
+    assert.equal(configuration(env).origin,'https://repready-abc123.vercel.app');
+    configuration(env);
+    assert.equal(warnings.length,1,'warn once, not on every request');
+    assert.match(warnings[0],/APP_ORIGIN is not set/);assert.match(warnings[0],/https:\/\/repready-abc123\.vercel\.app/);
+    configuration({...env,APP_ORIGIN:'https://repready-gym.vercel.app'});
+    assert.equal(warnings.length,1,'no warning when APP_ORIGIN is set');
+  }finally{console.warn=original;}
+});
+
+test('the local dev server sends pages opened on another host to APP_ORIGIN, but never API calls',async()=>{
+  const dev=await import('../src/dev.js');
+  assert.equal(typeof dev.createDevServer,'function','src/dev.js must export createDevServer');
+  const server=dev.createDevServer({APP_ORIGIN:'http://localhost:4173'});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const port=server.address().port;
+  // fetch cannot set Host, so use node:http to send exactly what a browser on another host would.
+  const get=(path,host)=>new Promise((resolve,reject)=>{
+    const req=http.request({host:'127.0.0.1',port,path,headers:{host}},res=>{res.resume();res.on('end',()=>resolve({status:res.statusCode,location:res.headers.location}));});
+    req.on('error',reject);req.end();
+  });
+  try{
+    const page=await get('/?checkout=abc','127.0.0.1:4173');
+    assert.equal(page.status,302);assert.equal(page.location,'http://localhost:4173/?checkout=abc');
+    assert.equal((await get('/app.js','localhost:4174')).status,302,'another port is another origin');
+    assert.equal((await get('/app.js','localhost:4173')).status,200,'the configured host is served normally');
+    assert.equal((await get('/api/session','127.0.0.1:4173')).status,503,'API calls reach the handler unredirected');
+  }finally{server.close();}
+  assert.deepEqual(dev.startupMessages({APP_ORIGIN:'http://localhost:4173'},4173),['Open http://localhost:4173']);
+  const mismatch=dev.startupMessages({APP_ORIGIN:'http://localhost:4173'},4174);
+  assert.equal(mismatch[0],'Open http://localhost:4173');assert.match(mismatch[1],/port 4174.*port 4173/);
+});
+
 test('notification sender records acceptance, rejects duplicate claims and preserves uncertain delivery',async()=>{
   const rows=[
     {id:'accepted',recipient:'accepted@example.invalid'},

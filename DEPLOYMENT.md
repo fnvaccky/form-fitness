@@ -114,6 +114,7 @@ In FORM admin Settings > Payment QR codes, upload the owner's actual GCash and b
 - Vercel sign-in: expected privacy gate; use an authorized NACKY account.
 - API 503: missing runtime variables or administrative key for invitations/mail.
 - API 403: wrong workspace/role or request origin; use the exact deployment hostname.
+- "This page was opened from a different address than the app expects" (formerly "Request origin is not allowed"): every form POST must come from exactly `APP_ORIGIN`. On Vercel, set `APP_ORIGIN` in each deployment's environment to the exact URL users open (for example the project domain, `https://<project>.vercel.app`, with no trailing slash), then redeploy. Opening a different alias of the same deployment, such as the per-deployment URL instead of the project domain, gives this error. If `APP_ORIGIN` is unset, the app falls back to `https://$VERCEL_URL`, the per-deployment URL, so visitors on the project domain always fail; the function log warns once when this happens. Supabase Auth's redirect allowlist must also include `<APP_ORIGIN>/api/auth/callback`. Locally, `npm start` prints the address to open and redirects pages opened on another host or port to it.
 - Setup link expired: generate a new one; never weaken Auth or RLS.
 - Public demo signup/recovery denied: intentional; existing demo recovery uses the seed workflow. Staff-assisted paid-first registration is supported.
 - Camera unavailable: HTTPS and browser permission are required; use the image-upload fallback.

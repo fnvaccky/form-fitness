@@ -54,7 +54,7 @@ export async function handle(req,res,env=process.env) {
     const path=url.pathname==='/api'&&url.searchParams.has('__path')?'/'+url.searchParams.get('__path'):url.pathname.replace(/^\/api/,'')||'/';
     if(path==='/paymongo/webhook')return await handleWebhook(req,res,env,origin);
     if (!['GET','POST'].includes(req.method)) fail('Method not allowed.',405);
-    if (req.method==='POST' && req.headers.origin!==origin) fail('Request origin is not allowed.',403);
+    if (req.method==='POST' && req.headers.origin!==origin) fail(`This page was opened from a different address than the app expects. Open ${origin} and try again.`,403);
     const body=req.method==='POST'?await readBody(req):{};
     const client=serverClient(req,res,env);
     const rpc = async(action, data={}) => result(await client.rpc('ff_command',{action,body:data}));
