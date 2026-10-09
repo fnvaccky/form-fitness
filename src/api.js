@@ -54,7 +54,7 @@ export async function handle(req,res,env=process.env) {
     const path=url.pathname==='/api'&&url.searchParams.has('__path')?'/'+url.searchParams.get('__path'):url.pathname.replace(/^\/api/,'')||'/';
     if(path==='/paymongo/webhook')return await handleWebhook(req,res,env,origin);
     if (!['GET','POST'].includes(req.method)) fail('Method not allowed.',405);
-    if (req.method==='POST' && req.headers.origin!==origin) fail('Request origin is not allowed.',403);
+    if (req.method==='POST' && req.headers.origin!==origin) fail(`This page was opened from a different address than the app expects. Open ${origin} and try again.`,403);
     const body=req.method==='POST'?await readBody(req):{};
     const client=serverClient(req,res,env);
     const rpc = async(action, data={}) => result(await client.rpc('ff_command',{action,body:data}));
@@ -81,7 +81,15 @@ export async function handle(req,res,env=process.env) {
       // GoTrue /verify and saves the session through the cookie adapter. Unlike the PKCE code
       // exchange it needs no code verifier, so the link still works when the member opens their
       // email on a different device than the one they registered on.
-      const type=url.searchParams.get('type')||'', tokenHash=url.searchParams.get('token_hash')||'';
+      const type=url.searchParams.get('type')||'', tokenHash=url.searchParams.get('token_hash')||'', code=url.searchParams.get('code')||'';
+      // Supabase's default email templates return ?code= instead. That exchange needs the verifier cookie
+      // stored when the email was requested, so it only succeeds in the same browser.
+      if(!tokenHash && code){
+        const {error}=await client.auth.exchangeCodeForSession(code);
+        if(error)
+          return confirmationPage(res,origin,400,'This link expired or was already used','Each link works once and expires quickly. Request a new email, then open the most recent message. If you opened this on a different device, open it on the device where you requested it, or request a new link.');
+        res.statusCode=303;res.setHeader('Location',origin+CONFIRMATION_TYPES.recovery);return res.end();
+      }
       if(!Object.hasOwn(CONFIRMATION_TYPES,type) || !tokenHash)
         return confirmationPage(res,origin,400,'This link is not valid','Request a new confirmation or password recovery email, then open the most recent message.');
       const {error}=await client.auth.verifyOtp({token_hash:tokenHash,type});

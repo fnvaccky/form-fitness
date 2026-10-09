@@ -58,6 +58,63 @@ test('API rejects missing configuration, wrong origins and malformed bodies with
   }finally{server.close();}
 });
 
+test('a mismatched origin is still refused with 403 and told which address to open',async()=>{
+  const env={SUPABASE_URL:'https://example.supabase.co',SUPABASE_PUBLISHABLE_KEY:'publishable-placeholder',APP_ORIGIN:'http://localhost:4173'};
+  const server=http.createServer((req,res)=>handle(req,res,env));
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const base=`http://127.0.0.1:${server.address().port}`;
+  const recover=(origin,email)=>fetch(base+'/api/recovery',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({email})});
+  try{
+    // 127.0.0.1 vs localhost, another port, and another Vercel alias are all different origins.
+    for(const origin of ['http://127.0.0.1:4173','http://localhost:4174','https://repready-abc123.vercel.app']){
+      const response=await recover(origin,'member@example.test');
+      assert.equal(response.status,403,origin);
+      assert.equal((await response.json()).error,'This page was opened from a different address than the app expects. Open http://localhost:4173 and try again.');
+    }
+    // The exact origin passes the check and reaches the route's own validation (no Supabase call).
+    const matching=await recover(env.APP_ORIGIN,'not-an-email');
+    assert.equal(matching.status,400);
+    assert.equal((await matching.json()).error,'Enter a valid email address.');
+  }finally{server.close();}
+});
+
+test('on Vercel without APP_ORIGIN, the VERCEL_URL fallback is logged once',async()=>{
+  const {configuration}=await import('../src/supabase.js');
+  const warnings=[],original=console.warn;console.warn=message=>warnings.push(String(message));
+  try{
+    const env={SUPABASE_URL:'https://example.supabase.co',SUPABASE_PUBLISHABLE_KEY:'publishable',VERCEL:'1',VERCEL_URL:'repready-abc123.vercel.app'};
+    assert.equal(configuration(env).origin,'https://repready-abc123.vercel.app');
+    configuration(env);
+    assert.equal(warnings.length,1,'warn once, not on every request');
+    assert.match(warnings[0],/APP_ORIGIN is not set/);assert.match(warnings[0],/https:\/\/repready-abc123\.vercel\.app/);
+    configuration({...env,APP_ORIGIN:'https://repready-gym.vercel.app'});
+    assert.equal(warnings.length,1,'no warning when APP_ORIGIN is set');
+  }finally{console.warn=original;}
+});
+
+test('the local dev server sends pages opened on another host to APP_ORIGIN, but never API calls',async()=>{
+  const dev=await import('../src/dev.js');
+  assert.equal(typeof dev.createDevServer,'function','src/dev.js must export createDevServer');
+  const server=dev.createDevServer({APP_ORIGIN:'http://localhost:4173'});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const port=server.address().port;
+  // fetch cannot set Host, so use node:http to send exactly what a browser on another host would.
+  const get=(path,host)=>new Promise((resolve,reject)=>{
+    const req=http.request({host:'127.0.0.1',port,path,headers:{host}},res=>{res.resume();res.on('end',()=>resolve({status:res.statusCode,location:res.headers.location}));});
+    req.on('error',reject);req.end();
+  });
+  try{
+    const page=await get('/?checkout=abc','127.0.0.1:4173');
+    assert.equal(page.status,302);assert.equal(page.location,'http://localhost:4173/?checkout=abc');
+    assert.equal((await get('/app.js','localhost:4174')).status,302,'another port is another origin');
+    assert.equal((await get('/app.js','localhost:4173')).status,200,'the configured host is served normally');
+    assert.equal((await get('/api/session','127.0.0.1:4173')).status,503,'API calls reach the handler unredirected');
+  }finally{server.close();}
+  assert.deepEqual(dev.startupMessages({APP_ORIGIN:'http://localhost:4173'},4173),['Open http://localhost:4173']);
+  const mismatch=dev.startupMessages({APP_ORIGIN:'http://localhost:4173'},4174);
+  assert.equal(mismatch[0],'Open http://localhost:4173');assert.match(mismatch[1],/port 4174.*port 4173/);
+});
+
 test('notification sender records acceptance, rejects duplicate claims and preserves uncertain delivery',async()=>{
   const rows=[
     {id:'accepted',recipient:'accepted@example.invalid'},
@@ -136,6 +193,71 @@ test('email confirmation callback verifies token_hash without PKCE and routes by
       assert.equal(sent.body.code_verifier,undefined,'token_hash verification must not depend on a PKCE verifier');
     }
   }finally{server.close();supabase.close();}
+});
+
+test('a ?code= reset link opened in the requesting browser signs in through the PKCE exchange',async()=>{
+  const {createHash}=await import('node:crypto');
+  const state={requests:[],challenge:null,method:null,redirectTo:null};
+  const encode=value=>Buffer.from(JSON.stringify(value)).toString('base64url');
+  const userId='22222222-3333-4444-5555-666666666666',expires=Math.floor(Date.now()/1000)+3600;
+  const session={access_token:`${encode({alg:'HS256',typ:'JWT'})}.${encode({sub:userId,aud:'authenticated',exp:expires,session_id:'77777777-8888-9999-0000-111111111111'})}.test-signature`,
+    token_type:'bearer',expires_in:3600,expires_at:expires,refresh_token:'fake-refresh-token',
+    user:{id:userId,aud:'authenticated',role:'authenticated',email:'reset@example.invalid',app_metadata:{},user_metadata:{},created_at:new Date().toISOString()}};
+  // A fake GoTrue that only accepts the exchange when the verifier matches the challenge sent with /recover.
+  const supabase=http.createServer(async(req,res)=>{
+    let raw='';for await(const chunk of req)raw+=chunk;
+    const url=new URL(req.url,'http://localhost'),body=raw?JSON.parse(raw):null;
+    state.requests.push({path:url.pathname,grant:url.searchParams.get('grant_type'),body});
+    res.setHeader('Content-Type','application/json');
+    if(url.pathname==='/auth/v1/recover'){state.challenge=body.code_challenge;state.method=body.code_challenge_method;state.redirectTo=url.searchParams.get('redirect_to');return res.end('{}');}
+    if(url.pathname==='/auth/v1/token'&&url.searchParams.get('grant_type')==='pkce'){
+      const derived=state.method==='plain'?body.code_verifier:createHash('sha256').update(body.code_verifier||'').digest('base64url');
+      if(body.auth_code==='good-code'&&derived===state.challenge)return res.end(JSON.stringify(session));
+      res.statusCode=404;return res.end(JSON.stringify({code:404,error_code:'flow_state_not_found',msg:'invalid flow state, no valid flow state found'}));
+    }
+    res.statusCode=404;res.end('{}');
+  });
+  await new Promise(resolve=>supabase.listen(0,'127.0.0.1',resolve));
+  let origin='';
+  const server=http.createServer((req,res)=>handle(req,res,{SUPABASE_URL:`http://127.0.0.1:${supabase.address().port}`,SUPABASE_PUBLISHABLE_KEY:'publishable-placeholder',APP_ORIGIN:origin}));
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  origin=`http://127.0.0.1:${server.address().port}`;
+  try{
+    // Requesting the email from this browser stores the PKCE verifier as an HttpOnly cookie.
+    const requested=await fetch(origin+'/api/recovery',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({email:'reset@example.invalid'})});
+    assert.equal(requested.status,200);
+    const cookie=requested.headers.getSetCookie().map(value=>value.split(';')[0]).join('; ');
+    assert.match(cookie,/code-verifier=/,'the verifier is stored in the requesting browser');
+    assert.equal(state.redirectTo,origin+'/api/auth/callback','the link returns to the callback without extra parameters');
+    // Supabase's default template sends the browser back with ?code= instead of token_hash.
+    const opened=await fetch(`${origin}/api/auth/callback?code=good-code`,{redirect:'manual',headers:{cookie}});
+    assert.equal(opened.status,303);
+    assert.equal(opened.headers.get('location'),origin+'/#/set-password');
+    assert(opened.headers.getSetCookie().some(value=>/-auth-token(\.\d+)?=/.test(value.split(';')[0])&&/HttpOnly/i.test(value)),'an HttpOnly session cookie is set');
+    assert.equal(state.requests.find(r=>r.grant==='pkce').body.auth_code,'good-code');
+    // A code the provider rejects shows the HTML page, never JSON.
+    const rejected=await fetch(`${origin}/api/auth/callback?code=stale-code`,{redirect:'manual',headers:{cookie}});
+    assert.equal(rejected.status,400);
+    assert.match(await rejected.text(),/expired or was already used/);
+  }finally{server.close();supabase.close();}
+});
+
+test('a ?code= link opened without the requesting browser\'s verifier fails with the expired page and a device hint',async()=>{
+  let origin='';
+  const server=http.createServer((req,res)=>handle(req,res,{SUPABASE_URL:'https://example.supabase.co',SUPABASE_PUBLISHABLE_KEY:'publishable-placeholder',APP_ORIGIN:origin}));
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  origin=`http://127.0.0.1:${server.address().port}`;
+  try{
+    for(const query of ['?code=secret-code-1','?sb_flow_id=0123456789abcdef0123456789abcdef&code=secret-code-2']){
+      const response=await fetch(origin+'/api/auth/callback'+query,{redirect:'manual'});
+      assert.equal(response.status,400,query);
+      assert.match(response.headers.get('content-type'),/text\/html/,query);
+      const body=await response.text();
+      assert.match(body,/expired or was already used/,query);
+      assert.match(body,/If you opened this on a different device, open it on the device where you requested it, or request a new link\./,query);
+      assert.doesNotMatch(body,/secret-code/,'the code must never be echoed into the page');
+    }
+  }finally{server.close();}
 });
 
 test('role capabilities are explicit and default-deny',async()=>{

@@ -3,8 +3,13 @@ import { createClient } from '@supabase/supabase-js';
 import { parseCookie, stringifySetCookie } from 'cookie';
 import { fail } from './validation.js';
 
+let originFallbackWarned = false;
 export function configuration(env = process.env) {
   const configuredOrigin=env.APP_ORIGIN || (env.VERCEL_URL ? `https://${env.VERCEL_URL}` : '');
+  if (!env.APP_ORIGIN && env.VERCEL_URL && !originFallbackWarned) {
+    originFallbackWarned = true;
+    console.warn(`APP_ORIGIN is not set, so the app expects https://${env.VERCEL_URL}, this deployment's own URL. Forms opened from any other address, such as the project domain, are rejected. Set APP_ORIGIN to the exact URL users open, then redeploy.`);
+  }
   if (!env.SUPABASE_URL || !env.SUPABASE_PUBLISHABLE_KEY || !configuredOrigin) fail('Supabase runtime configuration is missing. See DEPLOYMENT.md.', 503);
   const origin = new URL(configuredOrigin).origin;
   if (origin !== configuredOrigin) fail('APP_ORIGIN must be an exact origin without a trailing slash.', 503);
