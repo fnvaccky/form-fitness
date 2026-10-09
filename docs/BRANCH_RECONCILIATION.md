@@ -212,3 +212,20 @@ In my opinion, the owner should choose **Option A now**, and treat Option C's QR
 - **Migrations:** they apply cleanly on top of `main`'s schema in the rehearsal above.
 
 The main argument for `main` is that it can take real payments today, with explicit opt-in. If live payments are needed before Option C's live-mode work could be reviewed, that trade-off should be weighed honestly. Whichever option is chosen, the owner should first run `scripts/hosted-preflight.sql`, reconcile any open `ff_paymongo_attempts` rows while `main`'s webhook is still deployed, and decide what to do with any same-day duplicate check-ins. All three steps come before any merge or `db push`.
+
+## Merge status
+
+Updated 10 October 2026. The branch `merge/option-a` implements Option A **steps 3–5**:
+
+- **Step 3:** `origin/main` is merged with a normal merge commit, so both histories are intact. Conflicts and broken auto-merges are resolved as described in section 2 and in the merge commit message.
+- **Step 4:** `main`'s two migration files are kept byte-for-byte. Their content is unchanged, but since `f622a83` they carry the versions the live project actually recorded for them: `20261001150532_paymongo_checkout.sql` and `20261001150805_paymongo_notification_permission.sql`. The live-only `20260919044433_repready_branding.sql` was added alongside them, so local and live migration history match.
+- **Step 5:** `supabase/migrations/20261010120000_retire_main_paymongo.sql` retires `main`'s design. It revokes the two retired functions and all writes to `ff_paymongo_attempts`, and keeps every historical row.
+
+Steps **1, 2, 6 and 7 remain for the owner:**
+
+- **Step 1:** run `scripts/hosted-preflight.sql` on the hosted project.
+- **Step 2:** reconcile any open `ff_paymongo_attempts` rows while `main`'s webhook is still deployed.
+- **Step 6:** review `supabase db push --dry-run --include-all`, then push.
+- **Step 7:** deploy and verify.
+
+Nothing has been merged into `main`. fnvaccky still has to agree before the owner opens a pull request.
