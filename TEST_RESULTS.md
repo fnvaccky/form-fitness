@@ -149,3 +149,23 @@ The dedicated suite deletes only its generated fixtures and suppresses real SMTP
 ## clark-changes pre-push verification - 2 October 2026
 
 The current intended working tree passed all requested checks before staging: `npm run check`, `npm run build`, `npm test` (25/25) and `npm run test:paymongo` (ten groups, successful exit and fixture cleanup). Checkout tests required no further fixes. Local Supabase security advisors reported no issues. Source scanning found no embedded PayMongo/webhook/Supabase service credentials in the 76 reviewed files; protected `.env.local` remained unchanged and private paths remained ignored. The exact 43-file inventory, Preview environment requirements and migration order are recorded in [PAYMONGO_DEMO_REPORT.md](PAYMONGO_DEMO_REPORT.md). The requested Git operation is a commit and push on `clark-changes` only; main, hosted schema and Production deployment are excluded.
+
+## Batch 01 stabilization on clark-changes - 10 October 2026
+
+Three commits: direct PayMongo checkout redirect with a double-submit guard; one check-in per member per Manila day (new migration `20261009120000_checkin_daily_limit.sql`); removal of the owner-login dead code and classroom wording that could still reach the connected app. Before the fix, a scratch copy of `tests/database.sql` reproduced the bug: a fresh pass (new nonce) recorded a second same-day check-in. Local `ff_checkins` held no rows, so there were no same-day duplicates to preserve. The migration was applied only to local Supabase, with psql in a single transaction. It is not recorded in local migration history, which records 4 of the 9 versions.
+
+| Check | Result |
+| --- | --- |
+| `npm run check` | PASS JavaScript syntax |
+| `npm run build` | PASS static build |
+| `npm test` | PASS 32 tests, including 5 new: 409 mapping for a repeat check-in, the "Already recorded" scan modal, owner-login removal, connected.js patch-order guard, classroom wording |
+| `npm run test:paymongo` | PASS 12 groups; provider calls intercepted, local Supabase, headless Edge |
+| `npm run test:registration` | PASS |
+| `tests/database.sql` via local psql | PASS 67 assertions (8 new for the daily limit); rolled back |
+| `tests/paid-first.sql` via local psql | PASS 8 assertion blocks; rolled back |
+| `tests/paymongo-demo.sql` via local psql | PASS 21 checks; rolled back |
+| `supabase db advisors --local --type security --level warn` | PASS no issues found |
+| `npm run test:auth` (additional) | PASS 8 groups |
+| `npm run test:onboarding` (additional, local dev server) | PASS 5 groups |
+
+Not verified: the "Already recorded" scan modal in a live browser (covered by the unit render test and the database assertions), the migration on the hosted project, and `tests/integration.js` / `tests/browser.js`, which need the demo workspace and credentials. No PayMongo provider request, hosted schema change or deployment occurred. Two pre-existing local checkouts from 2 October in `needs_review` were left untouched.
