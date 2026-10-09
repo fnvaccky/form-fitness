@@ -1,5 +1,7 @@
 # RepReady PayMongo setup
 
+> **Superseded.** This guide describes the earlier GCash/QR Ph design built on `ff_paymongo_attempts`. On this branch that design is retired (Option A in [docs/BRANCH_RECONCILIATION.md](docs/BRANCH_RECONCILIATION.md)). The current PayMongo setup, migrations and verification steps are in [PAYMONGO_DEMO_REPORT.md](PAYMONGO_DEMO_REPORT.md). The text below is kept unchanged as history.
+
 Code supports GCash and bank/wallet-app payments through QR Ph using PayMongo Hosted Checkout v2. Ordinary bank transfers remain manually reviewed. This does not enable a bank-account transfer API.
 
 ## Current verification
