@@ -205,3 +205,41 @@ Not verified:
 - The pre-flight script on the hosted project, where it was never run.
 
 No hosted change, deployment or PayMongo provider request occurred.
+
+## Batch 03 integration test, safety timer and Option A merge branch - 10 October 2026
+
+On `clark-changes`, two commits:
+
+- **Integration test repeatable within a day.**
+  - Local demo accounts were seeded once with `npm run seed:demo`, with `APP_WORKSPACE=demo` set for that command only. Credentials are stored only in `.local/demo-credentials.json`; no email was sent.
+  - A demo-workspace dev server ran on port 4174.
+  - Unpatched, a second same-day run failed at `tests/integration.js:57` (409, expected 400). Patched, the next three same-day runs each passed all 17 groups.
+- **PayMongo safety timer.** The 10 s timer id is now stored and cleared on reset and whenever a new attempt begins.
+
+On the new branch `merge/option-a`, which is not merged into `main`:
+
+- `origin/main` is merged with a normal merge commit, resolved per Option A.
+- `main`'s two migrations are kept unchanged.
+- `20261010120000_retire_main_paymongo.sql` revokes `main`'s two functions and all writes to `ff_paymongo_attempts`. Every historical row is kept.
+- Schema validation ran in a throwaway database (`supabase db start` in a temporary workdir, deleted afterwards). Its 12 migrations applied cleanly both in file order and in the hosted order.
+
+| Check | `clark-changes` | `merge/option-a` |
+| --- | --- | --- |
+| `npm run check` | PASS | PASS |
+| `npm run build` | PASS | PASS |
+| `npm test` | PASS 39 tests | PASS 39 tests |
+| `npm run test:paymongo` | PASS 12 groups | PASS 12 groups |
+| `npm run test:registration` | PASS | PASS |
+| `npm run test:integration` (demo, port 4174) | PASS 17 groups | PASS 17 groups |
+| `tests/database.sql` | PASS 67 (local) | PASS 67 (local and both throwaway orders) |
+| `tests/paid-first.sql` | PASS 8 blocks (local) | PASS 8 blocks (local and both throwaway orders) |
+| `tests/paymongo-demo.sql` | PASS 21 (local) | PASS 27 in both throwaway orders. Not run against the local DB, which lacks `main`'s objects. |
+| `supabase db advisors --local --type security --level warn` | PASS no issues | PASS no issues (local and both throwaway orders) |
+
+Not verified:
+
+- The patched test's first-visit-of-the-day path. Today's first run was the unpatched one; the next day's first run will cover it.
+- The Back/bfcache timer behaviour in a real browser.
+- Anything on the hosted project, where nothing was run.
+
+No hosted change, deployment or PayMongo provider request occurred.
