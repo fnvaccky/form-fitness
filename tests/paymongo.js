@@ -27,7 +27,7 @@ globalThis.fetch=async(url,options)=>{
  assert(options.headers.Authorization.startsWith('Basic '));
  if(options.method==='POST'){
   const a=JSON.parse(options.body).data.attributes;lastCreate=a;assert.equal(a.pass_on_fees,false);assert.equal(a.line_items[0].currency,'PHP');assert.equal(a.line_items[0].quantity,1);
-  const id='cs_Local'+(++count),session={id,type:'checkout_session',attributes:{...a,livemode:false,status:'active',checkout_url:'https://checkout.paymongo.com/'+id,payments:[]}};sessions.set(id,session);if(earlyWebhook){pay(id,'gcash');const response=await webhook(session);assert.equal(response.status,200,await response.text());}if(createReplyHook)await createReplyHook(session);if(providerFailure)throw Error('Mock lost create response');return Response.json({data:session});
+  const id='cs_Local'+(++count),session={id,type:'checkout_session',attributes:{...a,livemode:false,status:'active',checkout_url:'https://checkout.paymongo.com/'+id,payments:[]}};sessions.set(id,session);if(earlyWebhook){pay(id,'gcash');const response=await webhook(session);assert.equal(response.status,200,await response.text());}if(createReplyHook)await createReplyHook(session);if(providerFailure)throw Error('Mock lost create response');return Response.json({data:{id:session.id,type:'checkout_session',attributes:{checkout_url:session.attributes.checkout_url,livemode:session.attributes.livemode,created_at:123,updated_at:123}}});
  }
  const id=String(url).split('/').at(-1);assert(sessions.has(id),'Existing session retrieved');return Response.json({data:sessions.get(id)});
 };
@@ -49,7 +49,7 @@ try{
  const request={kind:'registration',registrationId,emailConfirmed:true,method:'ewallet',requestId:randomUUID()};
  const key=env.PAYMONGO_SECRET_KEY;env.PAYMONGO_SECRET_KEY='';await call('/paymongo/checkout',request,503);env.PAYMONGO_SECRET_KEY=key;
  const first=await call('/paymongo/checkout',{...request,amount:1,price:1,total:1,amountCents:1});assert.equal(first.checkout.status,'pending');assert.equal((await call('/paymongo/checkout',request)).checkout.id,first.checkout.id);assert.equal(count,1);assert.equal(lastCreate.line_items[0].amount,pending.registration.amount_cents);assert.equal((await db.auth.admin.listUsers({perPage:1000})).data.users.some(u=>u.email===email),false,'No Auth account before verified payment');
- const row=result(await db.from('ff_checkouts').select('*').eq('id',first.checkout.id).single());assert.deepEqual(row.methods,['gcash','paymaya','grab_pay']);
+ const row=result(await db.from('ff_checkouts').select('*').eq('id',first.checkout.id).single());assert.deepEqual(row.methods,['gcash','paymaya','grab_pay']);assert.equal(row.status,'pending');assert.equal(row.session_id,'cs_Local1');assert.equal(row.checkout_url,'https://checkout.paymongo.com/cs_Local1');assert.equal(row.review_reason,null,'Minimal V2 response binds without a reference mismatch');
  const unprivileged=createClient(env.SUPABASE_URL,env.SUPABASE_PUBLISHABLE_KEY,{auth:{persistSession:false,autoRefreshToken:false}});await unprivileged.auth.signInWithPassword({email:staff.email,password:staff.password});
  const forged=await unprivileged.rpc('ff_paymongo_settle',{body:{id:row.id,sessionId:row.session_id,amountCents:row.amount_cents,paymentId:'pay_Forged',method:'GCash'}});assert.equal(forged.error.code,'42501','Authenticated staff cannot forge provider settlement');
  await call('/registration-payment',{id:registrationId,amount:pending.registration.amount_cents/100,method:'Cash',verified:true,emailConfirmed:true,idempotencyKey:randomUUID()},400);
@@ -64,7 +64,7 @@ try{
  const registered=result(await db.from('ff_registrations').select('*').eq('id',registrationId).single());memberId=registered.member_id;assert(memberId);assert.equal(registered.email_status,'sent');
  assert.equal(result(await db.from('ff_payments').select('*').eq('member_id',memberId)).length,1);
  const profile=result(await db.from('ff_profiles').select('role').eq('id',memberId).single());assert.equal(profile.role,'member');
- console.log('PASS: e-wallet checkout, signed webhook, paid-first account/email, replay safety, cash collision guard and invalid/stale signatures');
+ console.log('PASS: minimal V2 create without reference binds pending; e-wallet checkout, signed webhook, paid-first account/email, replay safety, cash collision guard and invalid/stale signatures');
  const next=result(await db.from('ff_memberships').select('*').eq('member_id',memberId).single()).end_date;const date=new Date(next+'T12:00:00Z');date.setUTCDate(date.getUTCDate()+1);
  const renewal=await call('/paymongo/checkout',{kind:'renewal',memberId,plan:'plus',start:date.toISOString().slice(0,10),method:'card',requestId:randomUUID()});
  const renewalRow=result(await db.from('ff_checkouts').select('*').eq('id',renewal.checkout.id).single());assert.deepEqual(renewalRow.methods,['card']);
@@ -173,8 +173,24 @@ try{
  assert.equal(result(await db.from('ff_memberships').select('id').eq('member_id',earlyReg.member_id)).length,1);
  assert.equal(result(await db.from('ff_payments').select('id').eq('member_id',earlyReg.member_id)).length,1);
  console.log('PASS: early webhook binds the durable reference safely; account/cycle/invoice/payment provision once');
+ // Reproduce the old unbound create-response mismatch, using the saved provider ID only.
+ const oldCreate=await call('/members',{requestId:randomUUID(),name:'LOCAL TEST Old create recovery',email:'paymongo-recovery-'+randomUUID()+'@example.invalid',phone:'09170000004',plan:'basic',start:today()},201);extraRegistrations.push(oldCreate.registration.id);
+ providerFailure=true;try{await call('/paymongo/checkout',{kind:'registration',registrationId:oldCreate.registration.id,emailConfirmed:true,method:'gcash',requestId:randomUUID()},502);}finally{providerFailure=false;}
+ const savedSessionId='cs_Local'+count,oldRow=result(await db.from('ff_checkouts').select('*').eq('registration_id',oldCreate.registration.id).single());
+ result(await db.rpc('ff_paymongo_review',{body:{id:oldRow.id,category:'checkout_reference_mismatch',sessionId:savedSessionId}}));
+ await call('/login',admin);const oldSession=sessions.get(savedSessionId),realReference=oldSession.attributes.reference_number,createsBeforeRecovery=count;
+ oldSession.attributes.reference_number=randomUUID();await call('/paymongo/recover',{id:oldRow.id,sessionId:savedSessionId},409);
+ assert.equal(result(await db.from('ff_checkouts').select('session_id').eq('id',oldRow.id).single()).session_id,null,'Wrong GET reference cannot bind');
+ oldSession.attributes.reference_number=realReference;
+ const repaired=await call('/paymongo/recover',{id:oldRow.id});assert.equal(repaired.checkout.status,'pending');assert.equal(repaired.checkout.reviewReason,'');assert.equal(repaired.checkout.url,oldSession.attributes.checkout_url);assert.equal(count,createsBeforeRecovery,'Recovery performs GET only, never another POST');
+ const repairedRow=result(await db.from('ff_checkouts').select('*').eq('id',oldRow.id).single());assert.equal(repairedRow.session_id,savedSessionId);assert.equal(repairedRow.review_details.sessionId,savedSessionId,'Recovery preserves the original audit details');
+ assert.equal(result(await db.from('ff_registrations').select('status,member_id').eq('id',oldCreate.registration.id).single()).member_id,null,'Recovery alone cannot provision an unpaid registration');
+ oldSession.attributes.status='expired';assert.equal((await call('/paymongo/status',{id:oldRow.id})).checkout.status,'expired');
+ assert.equal(result(await db.from('ff_registrations').select('status').eq('id',oldCreate.registration.id).single()).status,'awaiting_payment');
+ console.log('PASS: saved-ID recovery strictly verifies GET, preserves audit history, clears only the old creation error and never creates or credits a second checkout');
+ await call('/login',staff);
  // Render all three selectors and a generated checkout QR in real Edge.
- browser=await chromium.launch({channel:'msedge',headless:true});const page=await browser.newPage();await page.goto(origin);await page.getByLabel('Email address',{exact:true}).fill(staff.email);await page.getByLabel('Password',{exact:true}).fill(staff.password);await page.getByRole('button',{name:'Log in',exact:true}).click();await page.getByRole('button',{name:'Add member',exact:true}).waitFor();
+ browser=await chromium.launch({channel:'msedge',headless:true});const page=await browser.newPage();await page.route('https://checkout.paymongo.com/**',route=>route.fulfill({contentType:'text/html',body:'<h1>Simulated PayMongo checkout</h1>'}));await page.goto(origin);await page.getByLabel('Email address',{exact:true}).fill(staff.email);await page.getByLabel('Password',{exact:true}).fill(staff.password);await page.getByRole('button',{name:'Log in',exact:true}).click();await page.getByRole('button',{name:'Add member',exact:true}).waitFor();
  await page.evaluate(()=>{const r=state.registrations.find(x=>x.name==='LOCAL TEST PayMongo');registrationCash({...r,status:'awaiting_payment'});});
  assert.equal(await page.locator('#registration-channel optgroup[label="Pay online (TEST MODE)"] option:not(:disabled)').count(),4,'Staff can choose all configured online methods without recordOnlinePayment');
  await page.selectOption('#registration-channel','card');assert.equal(await page.locator('#registration-cash-confirmed').isVisible(),false);assert.equal(await page.getByRole('button',{name:'Continue to secure checkout',exact:true}).count(),1);
@@ -186,14 +202,27 @@ try{
  const latest=result(await db.from('ff_memberships').select('end_date').eq('member_id',memberId).order('end_date',{ascending:false}).limit(1).single()).end_date;
  const nextStart=new Date(latest+'T12:00:00Z');nextStart.setUTCDate(nextStart.getUTCDate()+1);
  const browserInvoice=await call('/renew',{memberId,plan:'basic',start:nextStart.toISOString().slice(0,10)});
- await page.evaluate(async id=>{await refreshData();pay(id);},browserInvoice.invoiceId);await page.selectOption('#invoice-channel','card');await page.getByRole('button',{name:'Continue to secure checkout',exact:true}).click();await page.locator('#checkout-link-qr').waitFor();
- const browserRow=result(await db.from('ff_checkouts').select('*').eq('invoice_id',browserInvoice.invoiceId).single());pay(browserRow.session_id,'card');await page.getByRole('button',{name:'Check payment status',exact:true}).click();await page.locator('#checkout-link-qr').waitFor({state:'detached'});
+ await page.evaluate(async id=>{await refreshData();pay(id);},browserInvoice.invoiceId);await page.selectOption('#invoice-channel','card');
+ let releaseCreate;const createGate=new Promise(resolve=>{releaseCreate=resolve;});let uiRequests=0;
+ await page.route(origin+'/api/paymongo/checkout',async route=>{uiRequests++;await createGate;await route.continue();});
+ const continueButton=page.getByRole('button',{name:'Continue to secure checkout',exact:true});await continueButton.click();await page.waitForFunction(()=>document.querySelector('[form="payment-form"]').disabled);
+ await page.evaluate(()=>document.getElementById('payment-form').requestSubmit());assert.equal(uiRequests,1,'A repeated submit while busy sends one checkout request');
+ releaseCreate();await page.waitForURL('https://checkout.paymongo.com/**');assert.equal(uiRequests,1);await page.unroute(origin+'/api/paymongo/checkout');
+ const browserRow=result(await db.from('ff_checkouts').select('*').eq('invoice_id',browserInvoice.invoiceId).single());await page.goto(origin+'/?checkout='+browserRow.id+'#/payments');await page.getByRole('button',{name:'Check payment status',exact:true}).waitFor();pay(browserRow.session_id,'card');await page.getByRole('button',{name:'Check payment status',exact:true}).click();await page.locator('#checkout-link-qr').waitFor({state:'detached'});
  assert.equal(result(await db.from('ff_invoices').select('amount_cents,paid_cents').eq('id',browserInvoice.invoiceId).single()).paid_cents,browserRow.amount_cents);
- await page.evaluate(id=>walkinRenew(id),memberId);await page.selectOption('#renewal-channel','grab_pay');await page.check('#walkin-verified');await page.getByRole('button',{name:'Continue to secure checkout',exact:true}).click();await page.locator('#checkout-link-qr').waitFor();
- const browserRenew=result(await db.from('ff_checkouts').select('*').eq('member_id',memberId).eq('status','pending').single());pay(browserRenew.session_id,'grab_pay');await page.getByRole('button',{name:'Check payment status',exact:true}).click();await page.locator('#checkout-link-qr').waitFor({state:'detached'});
+ await page.evaluate(id=>walkinRenew(id),memberId);await page.selectOption('#renewal-channel','grab_pay');await page.check('#walkin-verified');await page.getByRole('button',{name:'Continue to secure checkout',exact:true}).click();await page.waitForURL('https://checkout.paymongo.com/**');
+ const browserRenew=result(await db.from('ff_checkouts').select('*').eq('member_id',memberId).eq('status','pending').single());pay(browserRenew.session_id,'grab_pay');await page.goto(origin+'/?checkout='+browserRenew.id+'#/payments');await page.getByRole('button',{name:'Add member',exact:true}).waitFor();await page.waitForFunction(()=>state.checkouts.some(c=>c.id===new URL(location.href).searchParams.get('checkout')&&c.status==='paid'));
  assert.equal(result(await db.from('ff_payments').select('method').eq('invoice_id',browserRenew.invoice_id).single()).method,'GrabPay');
  console.log('PASS: staff/member isolation, mobile selectors, no cash checkbox on card checkout, and scannable hosted-checkout QR');
  console.log('PASS: actual record-payment card and walk-in e-wallet form submissions create and verify checkouts');
+ const uiRegistration=await call('/members',{requestId:randomUUID(),name:'LOCAL TEST Browser first payment',email:'paymongo-browser-'+randomUUID()+'@example.invalid',phone:'09170000004',plan:'basic',start:today()},201);extraRegistrations.push(uiRegistration.registration.id);
+ await page.evaluate(async id=>{await refreshData();registrationCash(state.registrations.find(r=>r.id===id));},uiRegistration.registration.id);await page.selectOption('#registration-channel','gcash');await page.check('#registration-email-confirmed');
+ const createdResponse=page.waitForResponse(r=>r.url()===origin+'/api/paymongo/checkout');await page.getByRole('button',{name:'Continue to secure checkout',exact:true}).click();assert.equal((await createdResponse).status(),200);await page.waitForURL('https://checkout.paymongo.com/**');
+ const uiRow=result(await db.from('ff_checkouts').select('*').eq('registration_id',uiRegistration.registration.id).single());assert.equal(uiRow.status,'pending');assert.equal(new URL(page.url()).pathname,'/'+uiRow.session_id);
+ pay(uiRow.session_id,'gcash');assert.equal((await webhook(sessions.get(uiRow.session_id))).status,200);
+ const uiPaid=result(await db.from('ff_registrations').select('status,member_id').eq('id',uiRegistration.registration.id).single());assert.equal(uiPaid.status,'provisioned');assert(uiPaid.member_id);fixtures.push(uiPaid.member_id);
+ assert.equal(result(await db.from('ff_payments').select('id').eq('member_id',uiPaid.member_id)).length,1);
+ console.log('PASS: staff first-registration GCash form returns 200, redirects immediately and auto-provisions exactly once after a signed simulated webhook');
  const memberContext=await browser.newContext(),memberPage=await memberContext.newPage();await memberPage.goto(origin);await memberPage.getByLabel('Email address',{exact:true}).fill(other.email);await memberPage.getByLabel('Password',{exact:true}).fill(other.password);await memberPage.getByRole('button',{name:'Log in',exact:true}).click();await memberPage.waitForFunction(()=>currentUser?.role==='member');
  const manualInvoice=await call('/renew',{memberId:other.id,plan:'basic',start:date.toISOString().slice(0,10)});
  await memberPage.evaluate(async id=>{await refreshData();pay(id);},manualInvoice.invoiceId);

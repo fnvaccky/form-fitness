@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes,randomUUID,createHmac} from 'node:crypto';
 import {paymongoConfiguration,requirePaymongoTestMode} from '../src/paymongo-config.js';
-import {validCheckoutUrl,validateSession,verifySignature,handleWebhook} from '../src/paymongo.js';
+import {validCheckoutUrl,validateCreatedSession,validateSession,verifySignature,handleWebhook} from '../src/paymongo.js';
 
 // Ephemeral synthetic signing/configuration values; no merchant credentials or network calls.
 const env={APP_WORKSPACE:'production',PAYMONGO_ALLOW_LIVE:'false',PAYMONGO_SECRET_KEY:'sk_test_'+randomBytes(24).toString('hex'),PAYMONGO_WEBHOOK_SECRET:randomBytes(32).toString('hex')};
@@ -38,6 +38,17 @@ test('checkout URLs require HTTPS, exact hostname and no credentials',()=>{
 });
 test('all four enabled provider sources verify a paid PHP snapshot',()=>{
  for(const source of row.methods){const s=session();s.attributes.payments[0].attributes.source.type=source;assert.equal(validateSession(s,row,row.methods).source,source);}
+});
+test('V2 creation accepts the minimal response without verification-time fields',()=>{
+ const created={id:'cs_Minimal',type:'checkout_session',attributes:{checkout_url:'https://checkout.paymongo.com/cs_Minimal',livemode:false,created_at:123,updated_at:123}};
+ assert.doesNotThrow(()=>validateCreatedSession(created));
+ assert.throws(()=>validateSession(created,{...row,session_id:created.id}),/could not be confirmed/,'GET/webhook still requires the exact reference');
+});
+test('V2 creation still rejects invalid session IDs, missing attributes, unsafe URLs and live resources',()=>{
+ const created=()=>({id:'cs_Minimal',attributes:{checkout_url:'https://checkout.paymongo.com/cs_Minimal',livemode:false}});
+ for(const change of [s=>s.id='bad',s=>delete s.attributes,s=>s.attributes=[],s=>delete s.attributes.checkout_url,s=>s.attributes.checkout_url='https://checkout.paymongo.com.evil.example/x',s=>s.attributes.livemode=true,s=>delete s.attributes.livemode]){
+  const s=created();change(s);assert.throws(()=>validateCreatedSession(s));
+ }
 });
 test('failed, pending, cancelled, expired and awaiting-method payments cannot settle',()=>{
  for(const status of ['failed','pending','cancelled','expired','awaiting_payment_method']){const s=session();s.attributes.payments[0].attributes.status=status;assert.equal(validateSession(s,row,row.methods),null);}

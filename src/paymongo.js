@@ -10,6 +10,13 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export function validCheckoutUrl(value){
  try{const url=new URL(value);return url.protocol==='https:'&&url.hostname==='checkout.paymongo.com'&&!url.username&&!url.password&&!url.port;}catch{return false;}
 }
+export function validateCreatedSession(session){
+ if(!SESSION_ID.test(session?.id||''))mismatch('invalid_checkout_session',session);
+ const attributes=session.attributes;
+ if(!attributes||typeof attributes!=='object'||Array.isArray(attributes))mismatch('invalid_checkout_session',session);
+ if(!validCheckoutUrl(attributes.checkout_url))mismatch('invalid_checkout_url',session);
+ testResource(attributes);
+}
 function testResource(resource){
  if(resource?.livemode!==false)fail('Only PayMongo test resources are accepted.',409);
 }
@@ -26,7 +33,8 @@ async function provider(env,path,body){
  return value.data;
 }
 export function checkoutView(row){
- return {id:row.id,status:row.status,url:validCheckoutUrl(row.checkout_url)?row.checkout_url:'',registrationId:row.registration_id,invoiceId:row.invoice_id,amount:row.amount_cents/100,reviewReason:row.review_reason||''};
+ const recoverySessionId=row.review_reason==='checkout_reference_mismatch'&&SESSION_ID.test(row.review_details?.sessionId||'')?row.review_details.sessionId:'';
+ return {id:row.id,status:row.status,url:validCheckoutUrl(row.checkout_url)?row.checkout_url:'',registrationId:row.registration_id,invoiceId:row.invoice_id,amount:row.amount_cents/100,reviewReason:row.review_reason||'',recoverySessionId};
 }
 function observation(session,payment){
  const a=payment?.attributes||{};
@@ -35,7 +43,7 @@ function observation(session,payment){
  source:typeof a.source?.type==='string'?a.source.type.slice(0,30):null,livemode:typeof a.livemode==='boolean'?a.livemode:null};
 }
 class VerificationError extends HttpError{
- constructor(category,details){super(409,'Payment requires staff review. Do not submit another payment.');this.category=category;this.details=details;}
+ constructor(category,details){super(409,'PayMongo checkout could not be confirmed. Do not start another payment until this checkout is reconciled.');this.category=category;this.details=details;}
 }
 function mismatch(category,session,payment){throw new VerificationError(category,observation(session,payment));}
 export function validateSession(session,row,allowed=Object.keys(METHODS)){
@@ -107,9 +115,8 @@ export async function createCheckout(client,body,env,origin){
   const session=await provider(env,'/v2/checkout_sessions',{line_items:[{name:prepared.description,amount:row.amount_cents,currency:'PHP',quantity:1}],payment_method_types:methods,
    billing:{name:prepared.name,email:prepared.email},reference_number:row.id,metadata:{repready_checkout:row.id},send_email_receipt:true,pass_on_fees:false,
    success_url:origin+'/?checkout='+row.id+'#/payments',cancel_url:origin+'/?checkout='+row.id+'#/payments'});
-  if(!SESSION_ID.test(session?.id||'')||!validCheckoutUrl(session?.attributes?.checkout_url))mismatch('invalid_checkout_url',session);
-  testResource(session.attributes);
-  validateSession(session,{...row,session_id:session.id},config.methods);
+  // V2 creation can omit reference and financial fields. Verify those only on GET/webhook.
+  validateCreatedSession(session);
   row=await bind(db,row,session);
  }catch(error){
   const existing=result(await db.from('ff_checkouts').select('*').eq('id',row.id).eq('workspace',env.APP_WORKSPACE||'production').single());
@@ -122,7 +129,7 @@ export async function createCheckout(client,body,env,origin){
   if(error.definiteRejection)result(await db.from('ff_checkouts').update({status:'failed'}).eq('id',row.id).eq('status','creating'));
   else result(await db.rpc('ff_paymongo_review',{body:{id:row.id,category:'creation_outcome_uncertain'}}));
   if(error instanceof HttpError&&error.status===409)throw error;
-  fail(error.definiteRejection?'PayMongo rejected checkout creation. Reopen payment after checking configuration.':'Checkout creation needs review. Do not submit another payment; recover the existing session.',502);
+  fail(error.definiteRejection?'PayMongo rejected checkout creation. Reopen payment after checking configuration.':'PayMongo checkout could not be confirmed. Do not start another payment until this checkout is reconciled.',502);
  }
  return {checkout:checkoutView(row)};
 }
@@ -141,12 +148,22 @@ export async function reconcileCheckout(row,env,origin){
 }
 export async function recoverCheckout(row,sessionId,env,origin){
  testCheckout(row,env);
+ const knownCreateMismatch=row.review_reason==='checkout_reference_mismatch',reviewDetails=row.review_details;
+ if(!sessionId&&knownCreateMismatch)sessionId=reviewDetails?.sessionId;
  if(row.session_id||!['creating','needs_review'].includes(row.status)||!SESSION_ID.test(sessionId||''))fail('This checkout cannot be rebound.');
  const db=serviceClient(env),session=await provider(env,'/v1/checkout_sessions/'+sessionId);
  try{
   validateSession(session,{...row,session_id:sessionId},requirePaymongoTestMode(env).methods);
   if(!validCheckoutUrl(session.attributes.checkout_url))mismatch('invalid_checkout_url',session);
   row=await bind(db,row,session);
+  if(knownCreateMismatch){
+   // Full GET validation above authorizes clearing this creation-only error. Preserve audit
+   // details, and do not clear a newer concurrent review or change any financial record.
+   const cleared=await db.from('ff_checkouts').update({review_reason:null}).eq('id',row.id).eq('workspace',row.workspace)
+    .eq('session_id',session.id).eq('status','pending').eq('review_reason','checkout_reference_mismatch')
+    .eq('review_details',JSON.stringify(reviewDetails)).select('*').maybeSingle();
+   row=result(cleared)||result(await db.from('ff_checkouts').select('*').eq('id',row.id).eq('workspace',row.workspace).single());
+  }
  }catch(error){return review(db,row,error);}
  return reconcileCheckout(row,env,origin);
 }
