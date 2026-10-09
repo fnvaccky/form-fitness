@@ -169,3 +169,39 @@ Three commits: direct PayMongo checkout redirect with a double-submit guard; one
 | `npm run test:onboarding` (additional, local dev server) | PASS 5 groups |
 
 Not verified: the "Already recorded" scan modal in a live browser (covered by the unit render test and the database assertions), the migration on the hosted project, and `tests/integration.js` / `tests/browser.js`, which need the demo workspace and credentials. No PayMongo provider request, hosted schema change or deployment occurred. Two pre-existing local checkouts from 2 October in `needs_review` were left untouched.
+
+## Batch 02 clean-up on clark-changes - 10 October 2026
+
+Three commits:
+
+- **PayMongo fixes:** returning from checkout (pageshow, including bfcache) and a ~10 s visible-page safety timer now reset the in-flight state; checkout marks the form that was actually submitted; and "Already recorded" uses the amber badge.
+- **Hosted pre-flight script:** a read-only `scripts/hosted-preflight.sql`, validated against local Supabase only.
+- **`docs/BRANCH_RECONCILIATION.md`.**
+
+Local migration history was repaired:
+
+- `supabase db diff --local --schema public,ff_private` reported no schema changes.
+- The five unrecorded versions were then marked applied with `supabase migration repair --status applied <version> --local`.
+- All 9 versions are now recorded, and `supabase migration up --local` applied nothing.
+
+`tests/integration.js` was not changed. It needs `APP_WORKSPACE=demo` and `.local/demo-credentials.json`, and that file is absent.
+
+| Check | Result |
+| --- | --- |
+| `npm run check` | PASS JavaScript syntax |
+| `npm run build` | PASS static build |
+| `npm test` | PASS 37 tests, including 5 new: pageshow re-arm, visible-only safety reset, submitted form marked, amber badge, pre-flight script shape |
+| `npm run test:paymongo` | PASS 12 groups; provider calls intercepted, local Supabase, headless Edge |
+| `npm run test:registration` | PASS |
+| `npm run test:integration` | NOT RUN: stops at its guard `Integration writes are restricted to APP_WORKSPACE=demo.`; demo credentials absent |
+| `tests/database.sql` via local psql | PASS 67 assertions; rolled back |
+| `tests/paid-first.sql` via local psql | PASS 8 assertion blocks; rolled back |
+| `tests/paymongo-demo.sql` via local psql | PASS 21 checks; rolled back |
+| `supabase db advisors --local --type security --level warn` | PASS no issues found |
+
+Not verified:
+
+- The Back/bfcache path in a real browser. Unit tests cover it by running `public/paymongo.js` in a sandbox, and the Edge PayMongo suite passes.
+- The pre-flight script on the hosted project, where it was never run.
+
+No hosted change, deployment or PayMongo provider request occurred.
