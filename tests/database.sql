@@ -76,6 +76,7 @@ reset role;
 select set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('ff.test')::jsonb->>'admin','role','authenticated','session_id',current_setting('ff.test')::jsonb->>'adminSession')::text,true);
 set local role authenticated;
 select pg_temp.ok(public.ff_command('scan',jsonb_build_object('token',current_setting('ff.pass')))->'member'->>'id'=current_setting('ff.test')::jsonb->>'member','Valid pass identifies correct member');
+select pg_temp.ok(jsonb_typeof(public.ff_command('scan',jsonb_build_object('token',current_setting('ff.pass')))->'alreadyCheckedInAt')='null','Scan reports no visit before the first check-in today');
 select pg_temp.must_fail($q$select public.ff_command('scan',jsonb_build_object('token',current_setting('ff.pass')||'tamper'))$q$,'Tampered pass rejected');
 select pg_temp.must_fail($q$select public.ff_command('check-in',jsonb_build_object('token',current_setting('ff.pass'),'confirmed',false))$q$,'Identity confirmation required');
 select public.ff_command('manage-member',jsonb_build_object('id',current_setting('ff.test')::jsonb->>'member','enabled',false));
@@ -84,6 +85,7 @@ select public.ff_command('manage-member',jsonb_build_object('id',current_setting
 select public.ff_command('check-in',jsonb_build_object('token',current_setting('ff.pass'),'confirmed',true));
 select pg_temp.must_fail($q$select public.ff_command('check-in',jsonb_build_object('token',current_setting('ff.pass'),'confirmed',true))$q$,'Replayed pass rejected');
 select pg_temp.ok((select count(*)=1 from public.ff_checkins where member_id=(current_setting('ff.test')::jsonb->>'member')::uuid),'Only one check-in recorded');
+select pg_temp.ok((select checkin_date=(now() at time zone 'Asia/Manila')::date from public.ff_checkins where member_id=(current_setting('ff.test')::jsonb->>'member')::uuid),'First check-in records the Manila calendar day');
 select pg_temp.must_fail($q$select public.ff_command('renew',jsonb_build_object('memberId',current_setting('ff.test')::jsonb->>'member','plan','basic','start',current_date))$q$,'Overlapping membership rejected');
 reset role;
 -- Sign a deliberately expired payload to test expiry independently of signature validity.
@@ -149,6 +151,25 @@ select pg_temp.fails_with($q$select public.ff_command('payments',jsonb_build_obj
 select pg_temp.fails_with($q$select public.ff_command('payments',jsonb_build_object('invoiceId',current_setting('ff.cash_invoice'),'amountCents',1000,'method','Bank transfer','reference','STAFFTEST123457','verified',true,'idempotencyKey',gen_random_uuid()))$q$,'Only an administrator can record','Staff cannot record a bank transfer payment');
 select pg_temp.ok((public.ff_command('payments',jsonb_build_object('invoiceId',current_setting('ff.cash_invoice'),'amountCents',1000,'method','Cash','verified',true,'idempotencyKey',gen_random_uuid()))->>'payment') is not null,'Staff record a cash payment at the desk');
 select pg_temp.ok((public.ff_command('renew',jsonb_build_object('memberId',current_setting('ff.cashmember'),'plan','basic','start',current_setting('ff.renewstart')))->>'invoiceId') is not null,'Staff create a renewal invoice for a member');
+
+-- One visit per member per Manila day: a fresh pass carries a new nonce but must not add a second visit.
+reset role;
+select set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('ff.test')::jsonb->>'member','role','authenticated','session_id',current_setting('ff.test')::jsonb->>'memberSession')::text,true);
+set local role authenticated;
+select set_config('ff.pass2',public.ff_command('qr','{}')->>'token',true);
+reset role;
+select set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('ff.staff')::jsonb->>'id','role','authenticated','session_id',current_setting('ff.staff')::jsonb->>'session')::text,true);
+set local role authenticated;
+select pg_temp.ok((public.ff_command('scan',jsonb_build_object('token',current_setting('ff.pass2')))->>'alreadyCheckedInAt')::timestamptz=(select created_at from public.ff_checkins where member_id=(current_setting('ff.test')::jsonb->>'member')::uuid),'Scanning a fresh pass reports the visit already recorded today');
+select pg_temp.fails_with($q$select public.ff_command('check-in',jsonb_build_object('token',current_setting('ff.pass2'),'confirmed',true))$q$,'Already checked in today.','A fresh pass cannot add a second check-in on the same day');
+select pg_temp.ok((select count(*)=1 from public.ff_checkins where member_id=(current_setting('ff.test')::jsonb->>'member')::uuid),'Still exactly one check-in today');
+reset role;
+select pg_temp.fails_with($q$insert into public.ff_checkins(workspace,member_id,membership_id,nonce,confirmed_by) select workspace,member_id,membership_id,gen_random_uuid(),confirmed_by from public.ff_checkins where member_id=(current_setting('ff.test')::jsonb->>'member')::uuid$q$,'ff_checkins_workspace_member_id_checkin_date_key','The database itself rejects a second same-day check-in');
+-- now() is fixed for the whole transaction, so the next day is simulated by moving the recorded visit to yesterday.
+update public.ff_checkins set checkin_date=checkin_date-1 where member_id=(current_setting('ff.test')::jsonb->>'member')::uuid;
+set local role authenticated;
+select pg_temp.ok(jsonb_typeof(public.ff_command('check-in',jsonb_build_object('token',current_setting('ff.pass2'),'confirmed',true))->'id')='string','A check-in on the next day is allowed');
+select pg_temp.ok((select count(*)=2 and count(distinct checkin_date)=2 from public.ff_checkins where member_id=(current_setting('ff.test')::jsonb->>'member')::uuid),'Each day records exactly one visit');
 
 -- A member must not reach any front-desk action.
 select set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('ff.test')::jsonb->>'member','role','authenticated','session_id',current_setting('ff.test')::jsonb->>'memberSession')::text,true);

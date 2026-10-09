@@ -267,3 +267,30 @@ test('payment email distinguishes partial balances from pass eligibility',async(
  const full=paymentEmail('Payment confirmed',{amount_cents:89900,paid_cents:89900},cycle,plan,'http://localhost:4173');
  assert.match(full,/fully paid/);assert.match(full,/during the membership dates/);assert.match(full,/http:\/\/localhost:4173\/#\/member\/overview/);assert.doesNotMatch(full,/Remaining balance/);
 });
+
+test('a repeat same-day check-in maps to 409 like the other already-recorded conflicts',async()=>{
+ const {result}=await import('../src/supabase.js');
+ const status=message=>{try{result({data:null,error:{code:'P0001',message}});}catch(error){return error.status;}};
+ assert.equal(status('Already checked in today.'),409);
+ assert.equal(status('This pass was already used.'),409);
+ assert.equal(status('Invalid member pass.'),400);
+});
+
+test('scanning a member already checked in today shows the recorded visit and blocks confirmation',async()=>{
+ const {readFile}=await import('node:fs/promises');const vm=await import('node:vm');
+ const source=(await readFile('public/connected.js','utf8')).match(/^async function verifyScanned\(token\)\{.*$/m)?.[0];
+ assert(source,'verifyScanned must stay a single top-level function in connected.js');
+ const render=async alreadyCheckedInAt=>{
+  let modal;const member={id:'M-1',name:'Test Member',phone:'09170000004',plan:'basic',end:'2026-10-31',photo:''};
+  const sandbox={api:async()=>({member,expires:0,alreadyCheckedInAt}),closeModal(){},openModal:(title,subtitle,body,foot)=>{modal={body,foot};},
+   avatar:()=>'',esc:s=>String(s),badge:s=>`<span class="badge">${s}</span>`,planOf:()=>({name:'Basic'}),date:d=>d,btn:label=>`<button>${label}</button>`};
+  vm.runInNewContext(source,sandbox);await sandbox.verifyScanned('FORM2.token');return modal;
+ };
+ const fresh=await render(null);
+ assert.doesNotMatch(fresh.body,/Already recorded/);assert.doesNotMatch(fresh.foot,/disabled/);
+ // The database returns microsecond timestamptz JSON; 06:05 UTC is 14:05 in Manila.
+ const repeat=await render('2026-10-09T06:05:00.123456+00:00');
+ assert.match(repeat.body,/<span class="badge">Already recorded<\/span>/);
+ assert.match(repeat.body,/Checked in today at 14:05 \(Manila time\)\. Another scan will not add a visit\./);
+ assert.match(repeat.foot,/<button class="button primary" type="submit" form="checkin-form" disabled>Confirm check-in<\/button>/);
+});

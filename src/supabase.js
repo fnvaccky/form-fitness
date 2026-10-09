@@ -37,7 +37,7 @@ export function result({ data, error }) {
   if (error) {
     if (error.code === '42501') fail(/Administrator|Gym staff/.test(error.message) ? error.message : 'Access denied. Sign in to an authorized account.', 403);
     if (error.code === '23505') fail('That reference, request, or account already exists. Refresh before trying again.', 409);
-    if (error.code === 'P0001') fail(error.message, /already|overlap|remaining balance/.test(error.message) ? 409 : 400);
+    if (error.code === 'P0001') fail(error.message, /already|overlap|remaining balance/i.test(error.message) ? 409 : 400);
     if (/^22|^23/.test(error.code || '')) fail('Invalid details. Check the required fields and selected records.');
     fail('The database request could not be completed.', 502);
   }
