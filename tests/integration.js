@@ -54,12 +54,16 @@ try{
   state=await call(other,'/state');assert.equal(state.invoices.find(i=>i.id===invoice.id).paidCents,invoice.amountCents);assert.equal(state.payments.filter(p=>p.invoiceId===invoice.id).length,2);passed('Full payment and duplicate direct request are atomic/idempotent');
   const pass=await call(customer,'/qr');
   const scanned=await call(admin,'/scan',{token:pass.token});assert.equal(scanned.member.id,customerAccount.id);
-  assert.equal((await admin.post('/api/check-in',{data:{token:pass.token,confirmed:false}})).status(),400);
+  // One visit per member per Manila day: a same-day rerun finds today's visit, so check-in answers 409.
+  const visitedToday=Boolean(scanned.alreadyCheckedInAt);
+  assert.equal((await admin.post('/api/check-in',{data:{token:pass.token,confirmed:false}})).status(),visitedToday?409:400);
   assert.equal((await admin.post('/api/scan',{data:{token:pass.token+'tampered'}})).status(),400);
   await call(admin,'/manage-member',{id:customerAccount.id,enabled:false});
   assert.equal((await admin.post('/api/scan',{data:{token:pass.token}})).status(),400);
   await call(admin,'/manage-member',{id:customerAccount.id,enabled:true});
-  await call(admin,'/check-in',{token:pass.token,confirmed:true});
+  if(visitedToday)assert.equal((await call(admin,'/check-in',{token:pass.token,confirmed:true},409)).error,'Already checked in today.');
+  else await call(admin,'/check-in',{token:pass.token,confirmed:true});
+  assert((await call(admin,'/scan',{token:(await call(customer,'/qr')).token})).alreadyCheckedInAt,"scan reports today's visit");
   assert.equal((await admin.post('/api/check-in',{data:{token:pass.token,confirmed:true}})).status(),409);passed('Valid QR, tampering, inactive status, identity confirmation, check-in and replay protection through API');
   const direct=createClient(process.env.SUPABASE_URL,process.env.SUPABASE_PUBLISHABLE_KEY,{auth:{persistSession:false,autoRefreshToken:false}});
   assert.equal((await direct.auth.signInWithPassword(customerAccount)).error,null);
