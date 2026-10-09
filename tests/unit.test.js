@@ -294,3 +294,36 @@ test('scanning a member already checked in today shows the recorded visit and bl
  assert.match(repeat.body,/Checked in today at 14:05 \(Manila time\)\. Another scan will not add a visit\./);
  assert.match(repeat.foot,/<button class="button primary" type="submit" form="checkin-form" disabled>Confirm check-in<\/button>/);
 });
+
+test('owner login is gone from the session API and the connected UI',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const session=await consoleSession('member');
+ try{assert.equal('canOwnerLogin' in await (await fetch(session.origin+'/api/session')).json(),false,'nothing reads canOwnerLogin');}
+ finally{session.close();}
+ const connected=await readFile('public/connected.js','utf8'),css=await readFile('public/connected.css','utf8');
+ for(const leftover of ['owner-login','ownerLoginAllowed','canOwnerLogin'])assert(!connected.includes(leftover),`connected.js still contains ${leftover}`);
+ assert(!css.includes('.owner-login'),'connected.css still styles the removed owner-login card');
+});
+
+test('connected.js text patches still match app.js in the order they run',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const app=await readFile('public/app.js','utf8'),connected=await readFile('public/connected.js','utf8');
+ // A reworded app.js string, or an earlier patch consuming a later target, would otherwise fail silently.
+ const chains=[...connected.matchAll(/base[A-Z]\w*\(\)((?:\.replace(?:All)?\('[^']*','[^']*'\))+)/g)].map(m=>m[1]);
+ assert(chains.length>=4,'expected the header, payments, overview and membership patch chains');
+ for(const chain of chains){
+  let text=app;
+  for(const [,all,from,to] of chain.matchAll(/\.replace(All)?\('([^']*)','([^']*)'\)/g)){
+   assert(text.includes(from),`connected.js patch '${from}' no longer matches app.js at its turn`);
+   text=all?text.replaceAll(from,to):text.replace(from,to);
+  }
+ }
+});
+
+test('app.js no longer carries the classroom wording the connected app can still show',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const app=await readFile('public/app.js','utf8');
+ assert.doesNotMatch(app,/classroom/i);
+ for(const phrase of ['Class demo guide','DEMO PAYMENT RECEIPT','Confirm demo payment','aria-label="Demo view"',"'Demo payment','pay'"])
+  assert(!app.includes(phrase),`app.js still contains ${phrase}`);
+});

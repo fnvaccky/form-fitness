@@ -101,7 +101,7 @@ export async function handle(req,res,env=process.env) {
       profile=result(await client.from('ff_profiles').select('*').eq('id',authUser.id).maybeSingle());
       if(profile?.workspace!==workspace) profile=null;
     }
-    if(path==='/session' && req.method==='GET')return send(res,200,{user:profile?userView(profile):null,canOwnerLogin:false,date:today()});
+    if(path==='/session' && req.method==='GET')return send(res,200,{user:profile?userView(profile):null,date:today()});
     if(!profile)fail('Please sign in to an authorized account for this workspace.',401);
     const admin=()=>{if(profile.role!=='admin')fail('Administrator access is required.',403);};
     const gymStaff=()=>{if(!['admin','staff'].includes(profile.role))fail('Gym staff access is required.',403);};
