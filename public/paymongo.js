@@ -9,7 +9,13 @@ function paymentChannels(id,cash=true,authorized=can('initiateOnlinePayment')){
 }
 let paymongoStarting=false;
 function validPaymongoUrl(value){try{const url=new URL(value);return url.protocol==='https:'&&url.hostname==='checkout.paymongo.com'&&!url.username&&!url.password&&!url.port;}catch{return false;}}
-async function startPaymongo(body){
+// A cancelled checkout navigation or a Back/bfcache return must leave online payment usable again.
+function resetPaymongoStart(){
+ paymongoStarting=false;
+ document.querySelectorAll('form[data-redirecting],form[data-submitting]').forEach(form=>{delete form.dataset.redirecting;delete form.dataset.submitting;const button=document.querySelector(`button[form="${form.id}"]`)||form.querySelector('[type="submit"]');if(button)button.disabled=false;});
+}
+window.addEventListener('pageshow',resetPaymongoStart);
+async function startPaymongo(body,form){
  if(paymongoStarting)return;
  const target=body.kind==='invoice'?state.invoices.find(i=>i.id===body.invoiceId):{memberId:body.memberId};
  if(!canInitiatePaymongo(body.kind,target))throw Error('This online payment is not authorized for your account.');
@@ -17,8 +23,10 @@ async function startPaymongo(body){
  try{
   const response=await api('/paymongo/checkout',{...body,requestId:paymentIntent}),checkout=response.checkout;
   if(checkout.status==='pending'&&!checkout.reviewReason&&validPaymongoUrl(checkout.url)){
-   const form=document.querySelector('.modal form');if(form)form.dataset.redirecting='true';
-   window.location.assign(checkout.url);redirecting=true;return;
+   if(form)form.dataset.redirecting='true';
+   window.location.assign(checkout.url);redirecting=true;
+   setTimeout(()=>{if(document.visibilityState==='visible')resetPaymongoStart();},10000);
+   return;
   }
   await refreshData();showPaymongo(checkout);
  }finally{if(!redirecting)paymongoStarting=false;}
@@ -59,10 +67,10 @@ function installPaymongo(){
    document.getElementById('invoice-channel').addEventListener('change',update);update();
   }else openModal('Pay your membership','Choose a simulated PayMongo payment or submit an existing transfer for review.',`<form id="paymongo-member-form">${paymentChannels('invoice-channel',false,canInitiatePaymongo('invoice',inv))}<div class="review-card"><h3>${esc(planOf(inv.plan).name)}</h3><p>Remaining balance: <strong>${money(balance(inv))}</strong></p></div><div class="form-error" role="alert"></div></form>`,`${btn('Close','close')}${btn('Cash / Manual payment','paymongo-manual')}<button class="button primary" form="paymongo-member-form" type="submit" ${state.paymongo?.configured&&canInitiatePaymongo('invoice',inv)?'':'disabled'}>Continue to secure checkout</button>`);
  };
- submitPayment=async function(){const method=document.getElementById('invoice-channel')?.value;if(method&&method!=='cash')return startPaymongo({kind:'invoice',invoiceId:paymentInvoice,method});return cashSubmit();};
+ submitPayment=async function(form){const method=document.getElementById('invoice-channel')?.value;if(method&&method!=='cash')return startPaymongo({kind:'invoice',invoiceId:paymentInvoice,method},form);return cashSubmit();};
  const cashPayments=payments;
  payments=function(){let html=cashPayments();const pending=(state.checkouts||[]).filter(c=>['creating','pending','needs_review'].includes(c.status)||c.review_reason);if(pending.length)html+=`<section class="panel"><div class="panel-header"><div><h2>Online payments in progress</h2><p>Resume or check an existing payment before paying again.</p></div></div><div class="table-scroll"><table class="data-table"><thead><tr><th>Member / checkout</th><th>Amount</th><th>Status</th><th>Action</th></tr></thead><tbody>${pending.map(c=>`<tr><td>${esc(memberById(c.member_id)?.name||(state.registrations||[]).find(r=>r.id===c.registration_id)?.name||'Membership')}<br><small>${esc(c.id)}</small></td><td>${money(c.amount_cents/100)}</td><td>${esc(c.status)}${c.review_reason?`<br><small>${esc(c.review_reason.replaceAll('_',' '))}</small>`:''}</td><td>${btn('Open / check','paymongo-open','small',`data-id="${c.id}"`)}</td></tr>`).join('')}</tbody></table></div></section>`;return html;};
- document.addEventListener('submit',event=>{const form=event.target;if(!['paymongo-member-form','recover-checkout-form'].includes(form.id))return;event.preventDefault();event.stopImmediatePropagation();runForm(form,async()=>{if(form.id==='paymongo-member-form')return startPaymongo({kind:'invoice',invoiceId:paymentInvoice,method:document.getElementById('invoice-channel').value});const outcome=await api('/paymongo/recover',{id:document.getElementById('recover-checkout-id').value,sessionId:document.getElementById('recover-session').value});await refreshData();showPaymongo(outcome.checkout);});},true);
+ document.addEventListener('submit',event=>{const form=event.target;if(!['paymongo-member-form','recover-checkout-form'].includes(form.id))return;event.preventDefault();event.stopImmediatePropagation();runForm(form,async()=>{if(form.id==='paymongo-member-form')return startPaymongo({kind:'invoice',invoiceId:paymentInvoice,method:document.getElementById('invoice-channel').value},form);const outcome=await api('/paymongo/recover',{id:document.getElementById('recover-checkout-id').value,sessionId:document.getElementById('recover-session').value});await refreshData();showPaymongo(outcome.checkout);});},true);
  document.addEventListener('click',event=>{const button=event.target.closest('[data-action]');if(!button||!['paymongo-status','paymongo-open','paymongo-manual'].includes(button.dataset.action))return;event.preventDefault();event.stopImmediatePropagation();button.disabled=true;(async()=>{if(button.dataset.action==='paymongo-manual')return checkoutModal(state.invoices.find(i=>i.id===paymentInvoice));if(button.dataset.action==='paymongo-open'){const row=state.checkouts.find(c=>c.id===button.dataset.id);return showPaymongo({id:row.id,status:row.status,url:row.checkout_url,reviewReason:row.review_reason,recoverySessionId:row.review_details?.sessionId||'',amount:row.amount_cents/100});}const outcome=await api('/paymongo/status',{id:button.dataset.id});await refreshData();if(outcome.checkout.status==='paid'){if(outcome.registration)registrationOutcome(outcome);else{closeModal();toast('Online payment confirmed. Membership balance updated.');}}else if(outcome.checkout.status==='expired'){closeModal();toast('Checkout closed without a confirmed payment. Choose a payment method again.');}else showPaymongo(outcome.checkout);})().catch(e=>toast(e.message)).finally(()=>{if(button.isConnected)button.disabled=false;});},true);
  // PayMongo returns to the app without carrying an authenticated payment assertion.
  const checkout=new URL(location.href).searchParams.get('checkout');

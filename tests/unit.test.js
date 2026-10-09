@@ -327,3 +327,67 @@ test('app.js no longer carries the classroom wording the connected app can still
  for(const phrase of ['Class demo guide','DEMO PAYMENT RECEIPT','Confirm demo payment','aria-label="Demo view"',"'Demo payment','pay'"])
   assert(!app.includes(phrase),`app.js still contains ${phrase}`);
 });
+
+// Loads public/paymongo.js into a sandbox whose provider call always returns a redirectable checkout.
+async function paymongoSandbox(forms){
+ const {readFile}=await import('node:fs/promises');const vm=await import('node:vm');
+ const button={disabled:true},firstModalForm={id:'recover-checkout-form',dataset:{},querySelector:()=>null},listeners={},timers=[],assigned=[];let apiCalls=0;
+ const sandbox={URL,state:{invoices:[{id:'inv-1'}]},paymentIntent:'intent-1',can:()=>true,currentUser:{role:'staff'},refreshData:async()=>{},
+  api:async()=>{apiCalls++;return {checkout:{id:'chk-1',status:'pending',reviewReason:'',url:'https://checkout.paymongo.com/cs_test'}};},
+  window:{addEventListener:(type,fn)=>{listeners[type]=fn;},location:{assign:url=>assigned.push(url)}},
+  document:{visibilityState:'visible',querySelector:selector=>selector==='.modal form'?firstModalForm:selector.startsWith('button[form=')?button:null,
+   querySelectorAll:()=>forms.filter(form=>form.dataset.redirecting||form.dataset.submitting)},
+  setTimeout:(fn,ms)=>{timers.push({fn,ms});}};
+ vm.runInNewContext(await readFile('public/paymongo.js','utf8'),sandbox);
+ const start=form=>sandbox.startPaymongo({kind:'invoice',invoiceId:'inv-1',method:'gcash'},form);
+ return {sandbox,button,firstModalForm,listeners,timers,assigned,start,apiCalls:()=>apiCalls};
+}
+
+test('a cancelled checkout navigation or a Back/bfcache return re-arms online payment',async()=>{
+ const form={id:'payment-form',dataset:{},querySelector:()=>null},p=await paymongoSandbox([form]);
+ await p.start(form);
+ assert.equal(p.assigned.length,1);assert.equal(form.dataset.redirecting,'true');
+ await p.start(form);
+ assert.equal(p.apiCalls(),1,'a second start while redirecting sends nothing');
+ form.dataset.submitting='true';
+ assert.equal(typeof p.listeners.pageshow,'function','paymongo.js must listen for pageshow');
+ p.listeners.pageshow({persisted:true});
+ assert.equal(form.dataset.redirecting,undefined);assert.equal(form.dataset.submitting,undefined);assert.equal(p.button.disabled,false);
+ await p.start(form);
+ assert.equal(p.apiCalls(),2,'payment works again after returning');
+});
+
+test('the in-flight safety reset fires after about 10 s and only while the page is still visible',async()=>{
+ const form={id:'payment-form',dataset:{},querySelector:()=>null},p=await paymongoSandbox([form]);
+ await p.start(form);
+ const timer=p.timers.find(t=>t.ms>=9000&&t.ms<=11000);
+ assert(timer,'startPaymongo must schedule a ~10 s safety reset');
+ p.sandbox.document.visibilityState='hidden';timer.fn();await p.start(form);
+ assert.equal(p.apiCalls(),1,'a hidden page (navigation committed) stays locked');
+ p.sandbox.document.visibilityState='visible';timer.fn();await p.start(form);
+ assert.equal(p.apiCalls(),2,'a page still visible after ~10 s is re-armed');
+});
+
+test('checkout marks the form that was submitted, not the first form in the modal',async()=>{
+ const {readFile}=await import('node:fs/promises');const vm=await import('node:vm');
+ const submitted={id:'payment-form',dataset:{},querySelector:()=>null},p=await paymongoSandbox([submitted]);
+ await p.start(submitted);
+ assert.equal(submitted.dataset.redirecting,'true');assert.equal(p.firstModalForm.dataset.redirecting,undefined);
+ const connected=await readFile('public/connected.js','utf8'),paymongo=await readFile('public/paymongo.js','utf8');
+ const ctx={document:{querySelector:()=>null},toast(){}};
+ vm.runInNewContext(connected.match(/^async function runForm\(form,operation\)\{.*$/m)[0],ctx);
+ let received;const form={id:'x',dataset:{},querySelector:()=>null};await ctx.runForm(form,f=>{received=f;});
+ assert.equal(received,form,'runForm hands the submitting form to its operation');
+ const calls=[...(connected+paymongo).matchAll(/startPaymongo\((\{[^{}]*\})(,form)?\)/g)];
+ assert.equal(calls.length,4,'expected the registration, walk-in, record-payment and member checkout entry points');
+ for(const call of calls)assert(call[2],`a checkout entry point does not pass the submitting form: ${call[1].slice(0,50)}`);
+});
+
+test('"Already recorded" uses the existing amber badge colours, not the Active green',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const amber=(await readFile('public/styles.css','utf8')).match(/\.badge\.pending,\.badge\.partial,\.badge\.unpaid\{([^}]*)\}/)[1];
+ const rule=(await readFile('public/connected.css','utf8')).match(/\.badge\.already\{([^}]*)\}/)?.[1];
+ assert(rule,'connected.css must style .badge.already');
+ const declarations=css=>Object.fromEntries(css.split(';').filter(Boolean).map(d=>d.split(':')));
+ assert.deepEqual(declarations(rule),declarations(amber));
+});
