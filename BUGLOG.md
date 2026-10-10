@@ -89,7 +89,7 @@ Also checked by hand locally:
 - `127.0.0.1` to `localhost` gives a 302;
 - in Mailpit, a nameless account's email reads "Hello,".
 
-## BUG-010: The same email could be added again as a member   (status: fixed, release pending)
+## BUG-010: The same email could be added again as a member   (status: fixed)
 Reported: 2026-10-10 by Clark. Where: Members & plans → Add member, and every other path that creates an account, role: admin or staff
 What happened: Clark registered a real email, then added the same email again as a member, and the app allowed it. Clark's rule: one email, one account, across every role and every path.
 Live data (read-only): today no email on live is used by more than one account, profile or registration in any letter case, and none would collide if Gmail dots and `+tags` were ignored. So the record behind the report couldn't be traced. The production Add member path already refused existing accounts and same-workspace registrations.
@@ -103,7 +103,7 @@ Fix: `9e100d0`, migration `20261010150000_email_uniqueness.sql`.
 - Member registration, staff creation and the Auth trigger, which every new app account passes through, all call it.
 - Backstops: a global unique index on `lower(email)` for `ff_profiles`, and a partial unique index on `lower(email)` for open registrations.
 - Gmail dots and `+tags` are not normalized; they are different addresses, so that stays an option.
-- Release: waiting for Clark's "go" at Gate 1.
+- Released 2026-10-10. After Clark's "go", the migration was pushed (live and local match in all 13 post-push checks), `main` was fast-forwarded to `6da0a63`, and Production deployment `dpl_5G3g2f2tjHqS6Ws2d9nVpuR63DKa` is READY. Smoke tests pass.
 Test added: `tests/database.sql` (11 assertions) and the new `tests/email-uniqueness.js` (`npm run test:emails`).
 - They cover every path, mixed case, the other workspace, the Auth trigger and both indexes, and confirm that normal registration and identical retries still work.
 - Two simultaneous registrations, in one workspace or across both, create exactly one.
