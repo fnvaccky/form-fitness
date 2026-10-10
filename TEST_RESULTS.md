@@ -280,3 +280,35 @@ Not verified:
 - Recovering a stuck checkout against real PayMongo; the mocked test covers it.
 
 No live database write, deployment or dashboard change occurred. PayMongo received only test-mode requests: one checkout and its payment, plus read-only GETs.
+
+## Task 08 staff management in the admin portal - 10 October 2026
+
+On `clark-changes`, local stack only:
+
+- **Migration** `20261010140000_staff_management.sql`, applied with `supabase migration up --local`. Local history is now 14 versions.
+- **Database:** 48 new assertions in `tests/database.sql`, for 115 in total. Three mutation checks each made the matching assertion fail: no session delete on disable, no 60-second resend window, and staff let through the administrator gate.
+- **Unit:** 8 new tests (52 in total). They cover the `manageStaff` capability, the admin-only staff list, the resend window and the Staff tab UI.
+- **End to end:** new `npm run test:staff` (6 groups), against the local stack, the dev server on port 4173 and Mailpit. The test leaves its accounts disabled. A disabled staff member got 401 on both open sessions and on a new sign-in attempt.
+- **Browser pass** in headless Edge, with screenshots `test-results/staff-01`…`staff-12` (gitignored). The admin added, searched, edited, disabled, enabled and resent twice (the second resend was rate-limited); the tab fits at phone width; staff and member logins show no Staff tab.
+- **Setup email template:** `supabase/templates/recovery.html` gained a branch for accounts without plan data. Staff emails carry no membership details, and member emails are unchanged (`test:onboarding` still checks plan privileges and dates).
+
+| Check | Result |
+| --- | --- |
+| `npm run check` | PASS |
+| `npm run build` | PASS |
+| `npm test` | PASS 52 tests |
+| `npm run test:paymongo` | PASS 12 groups |
+| `npm run test:registration` | PASS |
+| `npm run test:auth` | PASS 8 groups |
+| `npm run test:onboarding` | PASS 5 groups |
+| `npm run test:staff` | PASS 6 groups |
+| `npm run test:integration` (demo, port 4174) | PASS 17 groups |
+| `tests/database.sql` | PASS 115 |
+| `tests/paid-first.sql` | PASS 8 blocks |
+| `tests/paymongo-demo.sql` | PASS 27 |
+| `supabase db advisors --local --type security --level warn` | PASS no issues |
+
+Not verified:
+
+- Delivery of the staff setup email on the hosted project. It depends on the hosted Reset password template and SMTP settings.
+- Anything on live. The migration waits for the Gate 1 dry run and Clark's "go".

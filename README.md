@@ -16,6 +16,8 @@ The demo domain supplied for payment setup is https://repready-gym.vercel.app. A
 
 Persistent features include profiles, plans, membership cycles, invoices, partial payments, receipt review, signed member passes, check-ins, dashboards and notification records. Prices and balances use integer centavos. Staff verify cash and identity; administrators review manual transfer submissions. PayMongo test payments settle automatically after signed provider verification. A receipt, QR scan or checkout return URL never proves payment by itself.
 
+Administrators manage staff accounts in **Members & plans → Staff**: add (a password setup email follows), edit name and mobile, disable or enable, and resend the setup link. See `DEPLOYMENT.md` → Staff accounts. `scripts/create-staff.js` is only for converting an existing Auth account on the hosted project.
+
 ## Windows and VS Code
 
 Install Node.js 24 LTS and open this folder in VS Code. Run in PowerShell:

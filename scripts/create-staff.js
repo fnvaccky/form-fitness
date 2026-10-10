@@ -1,3 +1,6 @@
+// Staff are now created in the admin portal: Members & plans → Staff (POST /api/staff). This script
+// is kept only for converting an existing Auth account on the hosted project. See DEPLOYMENT.md → Staff accounts.
+//
 // Provisions an EXISTING Supabase Auth account as RepReady staff.
 // It never creates, deletes or re-registers an Auth user, and it never touches a password.
 // Run only after the staff role migration has been applied.

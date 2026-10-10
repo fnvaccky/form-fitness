@@ -1,5 +1,7 @@
 # Bug log
 
+Feature entries (`FEATURE-nnn`) record planned work, with status `built` until it is released and `released` after.
+
 Bugs Clark reports while testing by hand, one entry per bug, numbered in report order. Statuses: `fixed`, `config`, `cannot-reproduce`, `needs-decision`, and `noticed` for things spotted along the way but not reported. The two noticed items were first logged as BUG-002 and BUG-003; they were renumbered so that BUG-002 matches the reset-link bug as Clark and the planner refer to it.
 
 ## BUG-001: "Request origin is not allowed" on Reset password   (status: config)
@@ -45,3 +47,10 @@ What happened: Nothing visible yet. A paid checkout is confirmed when the payer 
 Root cause: configuration. The PayMongo account Production uses (the same account as the local test key, which can read the live checkout sessions) has one test webhook, created 31 August for a Supabase Edge Function on another project (`joffopwzqmlqpsrbivfq.supabase.co/functions/v1/paymongo-webhook`). None points at `https://repready-gym.vercel.app/api/paymongo/webhook`. Webhooks apply account-wide, so that other function also receives RepReady's payment events.
 Fix: config change for whoever manages the PayMongo account. In the PayMongo dashboard, in test mode, add a webhook with the URL `https://repready-gym.vercel.app/api/paymongo/webhook` (the alias; per-deployment URLs require a Vercel login) and the event `checkout_session.payment.paid`. Put its secret key in Vercel's `PAYMONGO_WEBHOOK_SECRET` for Production (Sensitive), then redeploy Production so the new value is used. Disabling the old webhook is the owner's decision. Nothing was changed by Claude.
 Test added: none. After the change, Claude can confirm it without writing anything: an event of an unknown type, signed with the new webhook's secret, should get 200 "ignored" from live (it returns before any database access), and a wrong secret gets 401.
+
+## FEATURE-001: Staff management in the admin portal   (status: built)
+Requested: 2026-10-10 by the planner (Task 08). Where: Members & plans → Staff, role: admin.
+Why: The staff role existed, but the only way to make a staff account was `scripts/create-staff.js`, a command-line script that runs only against the hosted project and only converts an existing Auth account.
+What changed: Administrators see every admin and staff profile in their workspace. They can add staff (a password setup email follows; the account stays if the email fails), edit name and mobile, disable or enable (disabling ends every session at once), and resend the setup link once per minute. Promotion, demotion and deletion are out of scope and not shown. Authorization lives in `ff_private.staff_admin` (migration `20261010140000_staff_management.sql`, with the `ff_staff_audit` trail) and is repeated with `admin()` in `src/api.js`. Accounts are created through the Auth admin API by `src/staff.js`, and the UI is `public/staff.js`. `supabase/templates/recovery.html` gained a branch for staff emails.
+Test added: `tests/database.sql` (48 assertions), `tests/unit.test.js` (8 tests), new `tests/staff.js` (`npm run test:staff`, 6 groups), and a browser pass with screenshots in `test-results/`.
+Live dependencies: the hosted Reset password template (reinstall the updated `recovery.html`) and custom SMTP. Without them, the account is still created and the app says "Account created; setup email needs a resend".

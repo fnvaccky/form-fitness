@@ -103,6 +103,24 @@ node --env-file-if-exists=.env.local scripts/create-admin.js
 
 This refuses existing accounts, creates a trusted admin via supported Auth administration, verifies its database role, and stores a one-time password setup link in restricted `.local/admin-setup.json`. It sends no email and prints no password or token. Open the file privately, use the link, and remove it after setup. Do not put it in screenshots or share it in a public chat.
 
+## Staff accounts
+
+Administrators create and manage staff in the app: **Members & plans → Staff** (needs migration `20261010140000_staff_management.sql`).
+
+- **Add staff** takes a full name, email and mobile number. The server creates the Auth account with the staff role (no membership or invoice) and sends a password setup email through the same path members use: Supabase recovery email → `/api/auth/callback` → `/#/set-password`. Administrators never see or set a staff password.
+- **Edit** changes the name and mobile number only. Email changes require re-creating the account.
+- **Disable** signs the person out of every session immediately; **Enable** lets them sign in again. Accounts are disabled, never deleted, because payments and check-ins reference them.
+- **Resend setup link** works once per staff member per 60 seconds.
+- Promoting staff to administrator and demoting administrators are not available; administrator rows are read-only.
+- Every create, edit, disable, enable and resend is recorded in `ff_staff_audit`, which administrators can read for their own workspace.
+
+The setup email depends on two Supabase dashboard settings. If the app says "Account created; setup email needs a resend", check these before suspecting the code:
+
+1. The **Reset password** template must be `supabase/templates/recovery.html` (see Email confirmation links). Its staff branch leaves out membership details; reinstall it if an earlier copy is in place.
+2. Without custom SMTP, Supabase's built-in mailer only delivers to the organization's team addresses and allows only a few emails per hour.
+
+`scripts/create-staff.js` remains only for converting an existing Auth account to staff on the hosted project. It never creates accounts.
+
 ## Gmail and payment QR configuration
 
 Enable Google 2-Step Verification and obtain an eligible account's [app password](https://support.google.com/mail/answer/185833). Add Gmail variables and the server secret in Vercel; redeploy. The sender uses TLS on port 465. Queue rows show queued, sending, sent, failed, needs_review or suppressed. Sent means SMTP accepted the recipient; it does not prove inbox delivery. Before retrying an uncertain send, inspect Gmail Sent. Demo records never send mail. A live test must use an explicitly authorized recipient and inspect both queue status and mailbox receipt.
