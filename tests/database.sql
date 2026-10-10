@@ -301,6 +301,31 @@ select set_config('request.jwt.claims',jsonb_build_object('sub',current_setting(
 set local role authenticated;
 select pg_temp.ok((select count(*)=0 from public.ff_staff_audit),'Members cannot read the staff audit trail');
 
+-- One email, one account: every create path, any workspace, any role, any letter case.
+reset role;
+create function pg_temp.error_of(statement text) returns text language plpgsql as $$
+declare msg text;
+begin begin execute statement; msg:='(no error raised)'; exception when others then msg:=SQLERRM; end; return msg; end $$;
+insert into public.ff_registrations(workspace,request_id,name,email,phone,plan_id,plan_name,features,days,start_date,end_date,amount_cents,created_by)
+ select 'demo',gen_random_uuid(),'DB TEST Pending Email','ff-db-eu-pending@example.invalid','09170000051','basic','Essential','[]',30,ff_private.today(),ff_private.today()+29,89900,(current_setting('ff.sm')::jsonb->>'admin')::uuid;
+select set_config('ff.eu_request',gen_random_uuid()::text,true);
+select set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('ff.sm')::jsonb->>'prodAdmin','role','authenticated','session_id',current_setting('ff.sm')::jsonb->>'prodAdminSession')::text,true);
+set local role authenticated;
+select pg_temp.ok(pg_temp.error_of($q$select public.ff_registration('create',jsonb_build_object('name','DB TEST Email','email','ff-db-eu-pending@example.invalid','phone','09170000052','plan','basic','start',(now() at time zone 'Asia/Manila')::date,'requestId',gen_random_uuid()))$q$)='An account already uses this email.','Registration refuses an email pending in another workspace');
+select pg_temp.ok(pg_temp.error_of($q$select public.ff_registration('create',jsonb_build_object('name','DB TEST Email','email','FF-DB-EU-PENDING@Example.Invalid','phone','09170000052','plan','basic','start',(now() at time zone 'Asia/Manila')::date,'requestId',gen_random_uuid()))$q$)='An account already uses this email.','Registration refuses the same email in any letter case');
+select pg_temp.ok(pg_temp.error_of($q$select public.ff_registration('create',jsonb_build_object('name','DB TEST Email','email','ff-db-sm-authonly@example.invalid','phone','09170000052','plan','basic','start',(now() at time zone 'Asia/Manila')::date,'requestId',gen_random_uuid()))$q$)='An account already uses this email.','Registration refuses an Auth account''s email with the shared message');
+select pg_temp.ok(pg_temp.error_of($q$select public.ff_registration('create',jsonb_build_object('name','DB TEST Email','email','ff-db-sm-prodadmin@example.invalid','phone','09170000052','plan','basic','start',(now() at time zone 'Asia/Manila')::date,'requestId',gen_random_uuid()))$q$)='An account already uses this email.','Registration refuses an administrator''s email');
+select pg_temp.ok((select public.ff_registration('create',jsonb_build_object('name','DB TEST Email','email','ff-db-eu-new@example.invalid','phone','09170000052','plan','basic','start',(now() at time zone 'Asia/Manila')::date,'requestId',current_setting('ff.eu_request')))->>'status')='awaiting_payment','Normal registration with a new email still works');
+select pg_temp.ok((select public.ff_registration('create',jsonb_build_object('name','DB TEST Email','email','ff-db-eu-new@example.invalid','phone','09170000052','plan','basic','start',(now() at time zone 'Asia/Manila')::date,'requestId',current_setting('ff.eu_request')))->>'request_id')=current_setting('ff.eu_request'),'An identical retry returns the same registration');
+select pg_temp.ok(pg_temp.error_of($q$select public.ff_registration('create',jsonb_build_object('name','DB TEST Email','email','ff-db-eu-new@example.invalid','phone','09170000052','plan','basic','start',(now() at time zone 'Asia/Manila')::date,'requestId',gen_random_uuid()))$q$)='An account already uses this email.','A second registration on top of a pending one is refused');
+select pg_temp.ok(pg_temp.error_of($q$select public.ff_staff_admin('prepare-create',jsonb_build_object('name','DB TEST Email Staff','email','ff-db-eu-pending@example.invalid','phone','09170000053'))$q$)='An account already uses this email.','Staff creation refuses an email pending in another workspace');
+reset role;
+-- Any new app account (staff, admin, seed or script) goes through the Auth trigger, which applies the same rule.
+select pg_temp.ok(pg_temp.error_of($q$insert into auth.users(id,email,raw_app_meta_data,raw_user_meta_data) values(gen_random_uuid(),'FF-DB-EU-PENDING@example.invalid','{"ff_workspace":"production","ff_role":"staff"}','{"form_fitness":true,"name":"DB TEST Email Staff","phone":"09170000053"}')$q$)='An account already uses this email.','A new app account cannot take an email a registration holds');
+-- Database backstops: one profile per email and one open registration per email, in any letter case.
+select pg_temp.ok(pg_temp.state_of($q$update public.ff_profiles set email=upper((select email from public.ff_profiles where id=(current_setting('ff.test')::jsonb->>'member')::uuid)) where id=(current_setting('ff.test')::jsonb->>'other')::uuid$q$)='23505','The database refuses two profiles with one email in any letter case');
+select pg_temp.ok(pg_temp.state_of($q$insert into public.ff_registrations(workspace,request_id,name,email,phone,plan_id,plan_name,features,days,start_date,end_date,amount_cents,created_by) select 'production',gen_random_uuid(),'DB TEST Pending Email','FF-DB-EU-PENDING@example.invalid','09170000051','basic','Essential','[]',30,ff_private.today(),ff_private.today()+29,89900,(current_setting('ff.sm')::jsonb->>'prodAdmin')::uuid$q$)='23505','The database refuses two open registrations with one email');
+
 reset role;
 select count(*) as passed_checks,jsonb_agg(label) as checks from ff_test_log;
 rollback;
