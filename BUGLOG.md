@@ -48,9 +48,24 @@ Root cause: configuration. The PayMongo account Production uses (the same accoun
 Fix: config change for whoever manages the PayMongo account. In the PayMongo dashboard, in test mode, add a webhook with the URL `https://repready-gym.vercel.app/api/paymongo/webhook` (the alias; per-deployment URLs require a Vercel login) and the event `checkout_session.payment.paid`. Put its secret key in Vercel's `PAYMONGO_WEBHOOK_SECRET` for Production (Sensitive), then redeploy Production so the new value is used. Disabling the old webhook is the owner's decision. Nothing was changed by Claude.
 Test added: none. After the change, Claude can confirm it without writing anything: an event of an unknown type, signed with the new webhook's secret, should get 200 "ignored" from live (it returns before any database access), and a wrong secret gets 401.
 
-## FEATURE-001: Staff management in the admin portal   (status: built)
+## FEATURE-001: Staff management in the admin portal   (status: released)
 Requested: 2026-10-10 by the planner (Task 08). Where: Members & plans → Staff, role: admin.
 Why: The staff role existed, but the only way to make a staff account was `scripts/create-staff.js`, a command-line script that runs only against the hosted project and only converts an existing Auth account.
 What changed: Administrators see every admin and staff profile in their workspace. They can add staff (a password setup email follows; the account stays if the email fails), edit name and mobile, disable or enable (disabling ends every session at once), and resend the setup link once per minute. Promotion, demotion and deletion are out of scope and not shown. Authorization lives in `ff_private.staff_admin` (migration `20261010140000_staff_management.sql`, with the `ff_staff_audit` trail) and is repeated with `admin()` in `src/api.js`. Accounts are created through the Auth admin API by `src/staff.js`, and the UI is `public/staff.js`. `supabase/templates/recovery.html` gained a branch for staff emails.
 Test added: `tests/database.sql` (48 assertions), `tests/unit.test.js` (8 tests), new `tests/staff.js` (`npm run test:staff`, 6 groups), and a browser pass with screenshots in `test-results/`.
 Live dependencies: the hosted Reset password template (reinstall the updated `recovery.html`) and custom SMTP. Without them, the account is still created and the app says "Account created; setup email needs a resend".
+Released: 2026-10-10. The migration was pushed to live after Clark's "go", `main` was fast-forwarded to `ebd1c9c`, and Production deployment `dpl_BG7Jaj4DKAEkdBhkGZ8Qx3P8pexk` is READY. Smoke tests pass.
+
+## BUG-007: The app's main font is Inter   (status: noticed — cosmetic, out of scope)
+Noticed: 2026-10-10 by Claude, from a design-quality hook during Task 08. Not reported by Clark.
+What happened: Nothing breaks. The hook flags Inter as an overused typeface that makes the interface feel generic.
+Root cause: a design choice that predates Task 08. `--sans` in `public/styles.css` lists Inter first. No web font is loaded, so devices without Inter use the system UI font.
+Fix: none, by Clark's decision. Changing the typeface is a visible design change that needs its own task.
+Test added: none.
+
+## BUG-008: The account setup email sets no type sizes   (status: noticed — cosmetic, out of scope)
+Noticed: 2026-10-10 by Claude, from a design-quality hook during Task 08. Not reported by Clark.
+What happened: Nothing breaks. The hook reports a flat type hierarchy in `supabase/templates/recovery.html`, with no clear size step between the headings and the body text.
+Root cause: the template is plain HTML with no font sizes, so each email client decides. That predates Task 08, which only added the staff branch.
+Fix: none, by Clark's decision. Styling it would need checks across email clients, plus another reinstall of the hosted template.
+Test added: none.
