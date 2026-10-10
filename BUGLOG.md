@@ -69,3 +69,22 @@ What happened: Nothing breaks. The hook reports a flat type hierarchy in `supaba
 Root cause: the template is plain HTML with no font sizes, so each email client decides. That predates Task 08, which only added the staff branch.
 Fix: none, by Clark's decision. Styling it would need checks across email clients, plus another reinstall of the hosted template.
 Test added: none.
+
+## BUG-009: Reset email link showed the login page instead of password setup   (status: config)
+Reported: 2026-10-10 by Clark. Where: the link in a password-reset email, role: signed out
+What happened: The link opened `https://form-fitness-achillespasuncion-2666.vercel.app/?token_hash=…&type=recovery`, which is the wrong host and the root path, and the app just showed the login page. The email also greeted "Hello ," because the account had no name.
+Root cause: Supabase Auth fell back to the Site URL instead of the requested redirect `https://repready-gym.vercel.app/api/auth/callback`, so `{{ .RedirectTo }}` became the old project domain's root. The app verified query tokens only at `/api/auth/callback`, so a root-path token was ignored. A callback on another host would also have set the session cookie on the wrong domain. The template printed `{{ .Data.name }}` without checking it.
+Fix: config change Clark is making. Set Site URL to `https://repready-gym.vercel.app`; Redirect URLs must include `https://repready-gym.vercel.app/api/auth/callback`. Code hardening in `19cb899`:
+- `public/auth-link.js` runs first. It forwards a `token_hash` link with an allowed type (recovery, invite, signup, email) from any path to `/api/auth/callback` before the sign-in page renders, and strips the token from history.
+- `GET /api/auth/callback` on any host other than `APP_ORIGIN`'s answers 302 to `APP_ORIGIN` + `/api/auth/callback` + the same query, before verifying. The target is fixed, never taken from the request.
+- The template greets "Hello," when there is no name. Re-paste `supabase/templates/recovery.html` into the hosted Reset password template.
+Test added: `tests/unit.test.js`:
+- "a token link on any path is forwarded to the callback and kept out of history";
+- "the sign-in page never renders while a token link is being forwarded";
+- "a callback opened on another host is redirected to APP_ORIGIN before any verification";
+- "a callback on the APP_ORIGIN host still verifies as before";
+- "the setup email greets an account without a name properly".
+Also checked by hand locally:
+- in a browser, a root-path token ends on the callback page with no sign-in form;
+- `127.0.0.1` to `localhost` gives a 302;
+- in Mailpit, a nameless account's email reads "Hello,".
