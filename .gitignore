@@ -13,3 +13,4 @@ artifacts/
 *.zip
 supabase/.temp/
 supabase/.branches/
+.impeccable/
