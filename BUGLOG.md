@@ -88,3 +88,23 @@ Also checked by hand locally:
 - in a browser, a root-path token ends on the callback page with no sign-in form;
 - `127.0.0.1` to `localhost` gives a 302;
 - in Mailpit, a nameless account's email reads "Hello,".
+
+## BUG-010: The same email could be added again as a member   (status: fixed, release pending)
+Reported: 2026-10-10 by Clark. Where: Members & plans → Add member, and every other path that creates an account, role: admin or staff
+What happened: Clark registered a real email, then added the same email again as a member, and the app allowed it. Clark's rule: one email, one account, across every role and every path.
+Live data (read-only): today no email on live is used by more than one account, profile or registration in any letter case, and none would collide if Gmail dots and `+tags` were ignored. So the record behind the report couldn't be traced. The production Add member path already refused existing accounts and same-workspace registrations.
+Root cause: the rule was spread across paths and incomplete.
+- `ff_private.registration` (`20261001213203_paymongo_demo_hardening.sql:31`) refused a registration only in the same workspace, and its advisory lock (line 24) was per workspace. Reproduced locally: an email pending in production was accepted again in the demo workspace (201).
+- Accounts created outside registrations never looked at pending registrations. That includes the Auth trigger `register_auth_user`, used by provisioning, `create-admin.js` and the seed scripts. Staff creation had its own check, in a separate transaction from `createUser` and without a lock.
+- Nothing in the database backed the rule up. `ff_profiles` was unique only per workspace.
+Fix: `9e100d0`, migration `20261010150000_email_uniqueness.sql`.
+- `ff_private.claim_email` is the one shared rule. It refuses an email any Auth user, profile or registration uses, in any workspace, for any role and in any letter case, with "An account already uses this email."
+- It is serialized by an advisory lock on the lower-cased email.
+- Member registration, staff creation and the Auth trigger, which every new app account passes through, all call it.
+- Backstops: a global unique index on `lower(email)` for `ff_profiles`, and a partial unique index on `lower(email)` for open registrations.
+- Gmail dots and `+tags` are not normalized; they are different addresses, so that stays an option.
+- Release: waiting for Clark's "go" at Gate 1.
+Test added: `tests/database.sql` (11 assertions) and the new `tests/email-uniqueness.js` (`npm run test:emails`).
+- They cover every path, mixed case, the other workspace, the Auth trigger and both indexes, and confirm that normal registration and identical retries still work.
+- Two simultaneous registrations, in one workspace or across both, create exactly one.
+- Mutation checks: the old registration function, the old trigger and missing indexes each fail the matching assertion.
