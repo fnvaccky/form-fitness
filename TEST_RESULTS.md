@@ -243,3 +243,40 @@ Not verified:
 - Anything on the hosted project, where nothing was run.
 
 No hosted change, deployment or PayMongo provider request occurred.
+
+## Task 06 release line, local database catch-up and PayMongo readiness - 10 October 2026
+
+On `clark-changes`:
+
+- **One release line.** `main` (`ed44803`, the live release) was merged in with a normal merge commit, `e1fb354`. The resulting tree equals `main`'s.
+- **Local database caught up to live, without a reset.**
+  - Validated first in a throwaway stack, deleted afterwards. Replaying the local database's 9 versions gave exactly its schema. Then applying the four live versions it lacked, after the later ones, gave exactly the schema of a replay of all 13 in live's order. The comparison was a `pg_dump` of `public` and `ff_private`, plus storage policies, auth triggers and buckets.
+  - After a full backup, `supabase migration up --local --include-all` applied `20260919044433`, `20261001150532`, `20261001150805` and `20261010120000`. The local database now records live's 13 versions, its schema matches the live-order replay, and its rows are unchanged.
+- **One real PayMongo test-mode payment, locally** (demo workspace, port 4174). A staff registration got a GCash checkout from PayMongo's test API. A status check left it cleanly `pending`. On PayMongo's hosted test page, "Authorize Test Payment" (headless Edge) redirected back, and the next status check returned `paid`. The registration was provisioned, the GCash payment (₱899) recorded, the invoice paid in full, and the setup email reached the local mail catcher with a `token_hash` link.
+
+| Check | Result |
+| --- | --- |
+| `npm run check` | PASS |
+| `npm run build` | PASS |
+| `npm test` | PASS 44 tests |
+| `npm run test:paymongo` | PASS 12 groups |
+| `npm run test:registration` | PASS |
+| `npm run test:integration` (demo, port 4174) | PASS 17 groups |
+| `tests/database.sql` | PASS 67 (local) |
+| `tests/paid-first.sql` | PASS 8 blocks (local) |
+| `tests/paymongo-demo.sql` | PASS 27 (local, now that it has `main`'s objects) |
+| `supabase db advisors --local --type security --level warn` | PASS no issues |
+
+Read-only on live:
+
+- The unsigned webhook gets 401, not 503, so Production passes the PayMongo test-mode configuration check.
+- All six live checkouts are `needs_review` from the old code, and none was paid at PayMongo (BUG-005).
+- No PayMongo webhook points at the live site (BUG-006).
+
+Not verified:
+
+- The webhook path with real PayMongo deliveries. PayMongo can't reach localhost, and no webhook exists for the live site yet.
+- The hosted Reset password template and email delivery on the hosted project.
+- Recovering a stuck checkout against real PayMongo; the mocked test covers it.
+
+No live database write, deployment or dashboard change occurred. PayMongo received only test-mode requests: one checkout and its payment, plus read-only GETs.

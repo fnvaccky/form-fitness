@@ -215,17 +215,19 @@ The main argument for `main` is that it can take real payments today, with expli
 
 ## Merge status
 
-Updated 10 October 2026. The branch `merge/option-a` implements Option A **steps 3–5**:
+Updated 10 October 2026, after the release. Option A is complete and live: `main` = `merge/option-a` = `ed44803`.
+
+The branch `merge/option-a` implements Option A **steps 3–5**:
 
 - **Step 3:** `origin/main` is merged with a normal merge commit, so both histories are intact. Conflicts and broken auto-merges are resolved as described in section 2 and in the merge commit message.
 - **Step 4:** `main`'s two migration files are kept byte-for-byte. Their content is unchanged, but since `f622a83` they carry the versions the live project actually recorded for them: `20261001150532_paymongo_checkout.sql` and `20261001150805_paymongo_notification_permission.sql`. The live-only `20260919044433_repready_branding.sql` was added alongside them, so local and live migration history match.
 - **Step 5:** `supabase/migrations/20261010120000_retire_main_paymongo.sql` retires `main`'s design. It revokes the two retired functions and all writes to `ff_paymongo_attempts`, and keeps every historical row.
 
-Steps **1, 2, 6 and 7 remain for the owner:**
+Steps **1, 2, 6 and 7** were done in the deploy gates on 10 October, with fnvaccky's agreement:
 
-- **Step 1:** run `scripts/hosted-preflight.sql` on the hosted project.
-- **Step 2:** reconcile any open `ff_paymongo_attempts` rows while `main`'s webhook is still deployed.
-- **Step 6:** review `supabase db push --dry-run --include-all`, then push.
-- **Step 7:** deploy and verify.
+- **Step 1:** the checks in `scripts/hosted-preflight.sql` ran read-only on the hosted project.
+- **Step 2:** there was nothing to reconcile: `ff_paymongo_attempts` had no rows.
+- **Step 6:** the dry run listed exactly `20261009120000` and `20261010120000`, and both were pushed.
+- **Step 7:** `main` was fast-forwarded to `merge/option-a` (`ed44803`), Vercel deployed it to Production, and the smoke tests passed.
 
-Nothing has been merged into `main`. fnvaccky still has to agree before the owner opens a pull request.
+**One release line.** `main` was then merged into `clark-changes` (`e1fb354`, Task 06). `main` and `merge/option-a` are ancestors of `clark-changes`, and its tree equals `main`'s. The next release is a fast-forward again: `merge/option-a` to `clark-changes`, then `main` to `merge/option-a`.

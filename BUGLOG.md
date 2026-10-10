@@ -23,6 +23,7 @@ What happened: Nothing has failed yet. Each run that finds no unpaid invoice ren
 Root cause: `tests/integration.js` (the renewal for the second account) always renews after the latest cycle. After about 5 more runs, the next start date passes the 365-day limit in `ff_private.new_membership` and the step fails.
 Fix: none yet; needs a decision. Either the test stops renewing when a future cycle already exists, or the demo customer's future cycles are cleaned up periodically.
 Test added: none.
+Update 2026-10-10 (Task 06): one more run. The customer now has 8 memberships, the latest ending 2027-06-06, so about 4–5 runs remain at today's date.
 
 ## BUG-004: `.env.local` defines each DEMO_* email twice   (status: noticed)
 Noticed: 2026-10-10 by Claude. Not reported by Clark.
@@ -30,3 +31,17 @@ What happened: `.env.local` has empty `DEMO_ADMIN_EMAIL`, `DEMO_CUSTOMER_EMAIL` 
 Root cause: configuration file, not code.
 Fix: config change Clark can make: delete the three empty lines 18–20 in `.env.local`. Nothing was changed by Claude.
 Test added: none.
+
+## BUG-005: Every online payment on the old live code went to review   (status: noticed)
+Noticed: 2026-10-10 by Claude, during Task 06's read-only checks on live. Not reported by Clark.
+What happened: All six live PayMongo checkouts (production workspace, created 2–9 October; one for a registration, five for invoices) are `needs_review` with reason `checkout_reference_mismatch`. None was bound to its PayMongo session or paid. An open checkout blocks its target (`ff_private.guard_open_checkout`), so that registration and those five invoices can't be paid online, in cash or by receipt until each checkout is resolved.
+Root cause: the old Production code (`c550f1c`) ran the full check, including `reference_number`, on PayMongo's V2 create response, which omits that field, so every checkout failed right after creation. `adaab3f` (Batch 01) checks the reference only on GET and webhook, and is live since the `ed44803` release. Read-only GETs of the six sessions with the local test key (same PayMongo account) show each one `active`, in test mode, with 0 payments and `reference_number` equal to its checkout id. So nothing was paid, and each passes the released check.
+Fix: code already fixed (`adaab3f`, live). Each leftover row needs an administrator on the live site: Payments → Online payments in progress → Open / check → Recover existing checkout (the session ID is prefilled). That rebinds the session and makes the checkout `pending` and payable online; it creates and credits nothing. A `pending` checkout still blocks cash until it is paid or its PayMongo session expires. These are live writes, so they are Clark's call. Nothing was changed by Claude.
+Test added: none new. `npm run test:paymongo` already covers "minimal V2 create without reference binds pending" and "saved-ID recovery strictly verifies GET". In Task 06, a real test-mode checkout created locally with the released code stayed cleanly `pending` after PayMongo's real GET, and a real GCash test payment settled as `paid`.
+
+## BUG-006: No PayMongo webhook points at the live site   (status: noticed)
+Noticed: 2026-10-10 by Claude, during Task 06's read-only checks. Not reported by Clark.
+What happened: Nothing visible yet. A paid checkout is confirmed when the payer returns to the app while signed in, or when staff use Check payment status, but never on its own. A customer who pays on their own phone, or closes the tab before returning, stays `pending` until someone checks.
+Root cause: configuration. The PayMongo account Production uses (the same account as the local test key, which can read the live checkout sessions) has one test webhook, created 31 August for a Supabase Edge Function on another project (`joffopwzqmlqpsrbivfq.supabase.co/functions/v1/paymongo-webhook`). None points at `https://repready-gym.vercel.app/api/paymongo/webhook`. Webhooks apply account-wide, so that other function also receives RepReady's payment events.
+Fix: config change for whoever manages the PayMongo account. In the PayMongo dashboard, in test mode, add a webhook with the URL `https://repready-gym.vercel.app/api/paymongo/webhook` (the alias; per-deployment URLs require a Vercel login) and the event `checkout_session.payment.paid`. Put its secret key in Vercel's `PAYMONGO_WEBHOOK_SECRET` for Production (Sensitive), then redeploy Production so the new value is used. Disabling the old webhook is the owner's decision. Nothing was changed by Claude.
+Test added: none. After the change, Claude can confirm it without writing anything: an event of an unknown type, signed with the new webhook's secret, should get 200 "ignored" from live (it returns before any database access), and a wrong secret gets 401.
