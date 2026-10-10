@@ -551,3 +551,114 @@ test('the hosted pre-flight script is one read-only transaction of SELECT statem
  assert(body.length>=6,'expected a SELECT for each report section');
  for(const statement of body)assert.match(statement,/^select\b/,`not a SELECT: ${statement.slice(0,60)}`);
 });
+
+// Staff management (Task 08).
+test('only administrators get the manageStaff capability',async()=>{
+ const {capabilitiesFor}=await import('../src/state.js');
+ assert.equal(capabilitiesFor('admin').manageStaff,true);
+ for(const role of ['staff','member','unknown',undefined])assert.equal(capabilitiesFor(role).manageStaff,undefined);
+});
+test('the staff list goes to administrators only, with admin and staff profiles and no other fields',async()=>{
+ const {staffFor}=await import('../src/state.js');
+ const row=(id,role,enabled=true)=>({id,role,enabled,name:'Test '+role,email:id+'@example.test',phone:'09170000001',created_at:'2026-10-01T20:00:00Z',photo:'demo/x/photo/p.png',goal:'Goal',workspace:'production'});
+ const profiles=[row('a','admin'),row('s','staff',false),row('m','member')];
+ assert.equal(staffFor({role:'staff'},profiles),undefined);
+ assert.equal(staffFor({role:'member'},profiles),undefined);
+ const list=staffFor({role:'admin'},profiles);
+ assert.deepEqual(list.map(s=>s.id),['a','s']);
+ assert.deepEqual(Object.keys(list[0]).sort(),['added','email','enabled','id','name','phone','role']);
+ assert.equal(list[0].added,'2026-10-02','Added date is the Manila calendar day');
+ assert.equal(list[1].enabled,false);
+});
+test('a staff setup link can be resent once per minute',async()=>{
+ const {resendRetryAfter}=await import('../src/staff.js');
+ const now=Date.parse('2026-10-10T08:00:00Z'),ago=ms=>new Date(now-ms).toISOString();
+ assert.equal(resendRetryAfter(null,now),0,'never sent');
+ assert.equal(resendRetryAfter('not a date',now),0);
+ assert.equal(resendRetryAfter(ago(10000),now),50);
+ assert.equal(resendRetryAfter(ago(59500),now),1,'partial seconds round up');
+ assert.equal(resendRetryAfter(ago(60000),now),0);
+ assert.equal(resendRetryAfter(ago(3600000),now),0);
+});
+
+async function staffSandbox({role='admin',tab='roster',staff}={}){
+ const {readFile}=await import('node:fs/promises');const vm=await import('node:vm');
+ const listeners={},modals=[],toasts=[],calls=[];
+ const caps={admin:{manageStaff:true,roster:true},staff:{roster:true},member:{}}[role];
+ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ const sandbox={
+  memberTab:tab,currentUser:{role},can:name=>caps[name]===true,
+  state:{staff:staff||[
+   {id:'a1',name:'Ana Admin',email:'ana@example.test',phone:'09170000001',role:'admin',enabled:true,added:'2026-09-19'},
+   {id:'s1',name:'Sam Staff',email:'sam@example.test',phone:'09170000002',role:'staff',enabled:true,added:'2026-10-10'},
+   {id:'s2',name:'Dee Disabled',email:'dee@example.test',phone:'09170000003',role:'staff',enabled:false,added:'2026-10-09'}]},
+  members:()=>'<div class="page-heading">HEAD</div><div class="tabs" role="tablist" aria-label="Membership sections"><button class="tab active" data-action="member-tab" data-tab="roster">Member directory<span>2</span></button><button class="tab" data-action="member-tab" data-tab="plans">Membership plans</button></div><section class="panel">ROSTER</section>',
+  esc,icon:name=>`<svg data-icon="${name}"></svg>`,badge:status=>`<span class="badge ${status.toLowerCase()}">${esc(status)}</span>`,
+  avatar:m=>`<span class="avatar">${esc(m.name.slice(0,2))}</span>`,date:d=>'D:'+d,
+  btn:(label,action,cls='',extra='',ico='')=>`<button class="button ${cls}" data-action="${action}" ${extra}>${label}</button>`,
+  field:(label,name,value='',type='text',extra='',hint='')=>`<label for="${name}">${label}</label><input id="${name}" type="${type}" value="${esc(value)}" ${extra}>${hint}`,
+  openModal:(title,subtitle,body,foot='')=>modals.push({title,subtitle,body,foot}),closeModal:()=>{},toast:message=>toasts.push(message),
+  validateContactFields:()=>{},refreshData:async()=>{},render:()=>{},
+  api:async(path,body)=>{calls.push({path,body});return sandbox.apiReply||{};},
+  runForm:async(form,operation)=>operation(form),
+  document:{addEventListener:(type,fn)=>{listeners[type]=fn;},getElementById:id=>({value:{'staff-name':'New Person','staff-email':'new@example.test','staff-phone':'09170000004','staff-edit-id':'s1','staff-edit-name':'Sam Renamed','staff-edit-phone':'09170000005'}[id]||''})}
+ };
+ vm.runInNewContext(await readFile('public/staff.js','utf8'),sandbox);
+ const click=(action,id)=>listeners.click({target:{closest:()=>({dataset:{action,id},disabled:false})},preventDefault(){},stopImmediatePropagation(){}});
+ const submit=async id=>{const form={id,dataset:{}};await listeners.submit({target:form,preventDefault(){},stopImmediatePropagation(){}});};
+ return {sandbox,listeners,modals,toasts,calls,click,submit};
+}
+test('the Staff tab is shown to administrators only',async()=>{
+ const admin=await staffSandbox({role:'admin'});
+ const html=admin.sandbox.members();
+ assert.match(html,/data-tab="staff"[^>]*>Staff<span>3<\/span>/,'Staff tab with a count badge');
+ assert(html.indexOf('data-tab="staff"')>html.indexOf('data-tab="plans"'),'Staff comes after Membership plans');
+ for(const role of ['staff','member']){
+  const other=await staffSandbox({role,tab:'staff'});
+  const page=other.sandbox.members();
+  assert.doesNotMatch(page,/data-tab="staff"/,`${role} sees no Staff tab`);
+  assert.doesNotMatch(page,/staff-add|Add staff/,`${role} gets no staff controls`);
+  assert.equal(other.sandbox.memberTab,'roster','a stale Staff tab falls back to the directory');
+ }
+});
+test('the staff table lists people and keeps administrators read-only',async()=>{
+ const {sandbox}=await staffSandbox({tab:'staff'});
+ const html=sandbox.members();
+ for(const heading of ['Name','Email','Mobile','Role','Status','Added'])assert(html.includes(`<th>${heading}</th>`),heading);
+ assert.match(html,/id="staff-search"/);assert.match(html,/data-action="staff-add"/);
+ assert.doesNotMatch(html,/ROSTER/,'the member directory is not shown on the Staff tab');
+ const rows=Object.fromEntries([...html.matchAll(/<tr data-staff="([^"]+)">(.*?)<\/tr>/g)].map(m=>[m[1],m[2]]));
+ assert.match(rows.a1,/Admins can(&#39;|’|')t be changed here/);
+ assert.doesNotMatch(rows.a1,/data-action="staff-/,'no actions on an admin row');
+ assert.match(rows.a1,/badge admin/);assert.match(rows.s1,/badge staff/);
+ for(const action of ['staff-edit','staff-toggle','staff-resend'])assert.match(rows.s1,new RegExp(`data-action="${action}"`));
+ assert.match(rows.s1,/badge active/);assert.match(rows.s1,/>Disable</);
+ assert.match(rows.s2,/badge disabled/);assert.match(rows.s2,/>Enable</);
+});
+test('disabling staff asks for confirmation and says they are signed out immediately',async()=>{
+ const t=await staffSandbox({tab:'staff'});
+ t.click('staff-toggle','s1');
+ assert.equal(t.modals.length,1);assert.match(t.modals[0].body+t.modals[0].subtitle,/signed out immediately/);
+ assert.equal(t.calls.length,0,'nothing changes before confirming');
+ t.click('staff-confirm-toggle','s1');await new Promise(r=>setImmediate(r));
+ assert.deepEqual(JSON.parse(JSON.stringify(t.calls[0])),{path:'/staff/enable',body:{id:'s1',enabled:false}});
+});
+test('adding staff explains their access and reports when the setup email needs a resend',async()=>{
+ const t=await staffSandbox({tab:'staff'});
+ t.click('staff-add');
+ const form=t.modals[0].body;
+ assert.match(form,/They(&#39;|’|')ll get an email to set their own password/);
+ assert.match(form,/can(&#39;|’|')t change plans, settings or approve transfers/);
+ t.sandbox.apiReply={staff:{id:'s3',name:'New Person',email:'new@example.test'},setupEmailSent:false,message:'Account created; setup email needs a resend.'};
+ await t.submit('staff-create-form');
+ assert.deepEqual(JSON.parse(JSON.stringify(t.calls[0])),{path:'/staff',body:{name:'New Person',email:'new@example.test',phone:'09170000004'}});
+ assert.match(t.modals.at(-1).body,/Account created; setup email needs a resend/);
+});
+test('editing staff never sends an email change',async()=>{
+ const t=await staffSandbox({tab:'staff'});
+ t.click('staff-edit','s1');
+ assert.match(t.modals[0].body,/Email changes require re-creating the account/);
+ assert.match(t.modals[0].body,/id="staff-edit-email"[^>]*readonly/);
+ await t.submit('staff-edit-form');
+ assert.equal(t.calls[0].path,'/staff/update');assert.deepEqual(Object.keys(t.calls[0].body).sort(),['id','name','phone']);
+});

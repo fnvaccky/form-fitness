@@ -17,7 +17,8 @@
     "test:auth": "node --env-file-if-exists=.env.local tests/auth.js",
     "test:onboarding": "node --env-file-if-exists=.env.local tests/onboarding.js",
     "test:registration": "node --env-file-if-exists=.env.local tests/registration-resilience.js",
-    "test:paymongo": "node --env-file-if-exists=.env.local tests/paymongo.js"
+    "test:paymongo": "node --env-file-if-exists=.env.local tests/paymongo.js",
+    "test:staff": "node --env-file-if-exists=.env.local tests/staff.js"
   },
   "engines": {
     "node": ">=22"

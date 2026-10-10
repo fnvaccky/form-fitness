@@ -9,12 +9,16 @@ export const planView = p => ({ id:p.id, name:p.name, price:p.price_cents/100, p
 // permission from a role string. The database enforces the same split independently; this only
 // decides which existing controls are rendered.
 const CAPABILITIES = {
-  admin: ['roster','addMember','renew','recordCashPayment','recordOnlinePayment','initiateOnlinePayment','reviewPayment','scan','manageMember','plans','paymentSettings','systemSettings'],
+  admin: ['roster','addMember','renew','recordCashPayment','recordOnlinePayment','initiateOnlinePayment','reviewPayment','scan','manageMember','manageStaff','plans','paymentSettings','systemSettings'],
   staff: ['roster','addMember','renew','recordCashPayment','initiateOnlinePayment','scan'],
   member: ['initiateOnlinePayment']
 };
 export const capabilitiesFor = role => Object.fromEntries((CAPABILITIES[role] || []).map(name => [name, true]));
 export const userView = p => ({ id:p.id, memberId:p.id, role:p.role, name:p.name, email:p.email, workspace:p.workspace, can:capabilitiesFor(p.role) });
+export const staffView = p => ({ id:p.id, name:p.name, email:p.email, phone:p.phone, role:p.role, enabled:p.enabled, added:datePH(p.created_at) });
+// Administrators only. RLS also lets staff read colleagues' profiles for the roster, so the list
+// is filtered here and never sent to staff or members.
+export const staffFor = (profile, profiles) => profile.role==='admin' ? profiles.filter(p=>['admin','staff'].includes(p.role)).map(staffView) : undefined;
 export async function signedImage(client, path) {
   if (!path) return '';
   return result(await client.storage.from(BUCKET).createSignedUrl(path, 300)).signedUrl;
@@ -38,7 +42,7 @@ export async function stateFor(client, profile, env) {
   const destinations = {};
   for (const [key, value] of Object.entries(settings.payments || {})) destinations[key] = {...value,imagePath:value.image,image:await signedImage(client,value.image)};
   return {
-    user:userView(profile),date:current,members,registrations,checkouts,paymongo:paymongoConfiguration(env),plans:plans.map(planView),
+    user:userView(profile),date:current,members,staff:staffFor(profile,profiles),registrations,checkouts,paymongo:paymongoConfiguration(env),plans:plans.map(planView),
     invoices:invoices.map(i=>{const c=cycles.find(c=>c.id===i.membership_id);return {id:i.id,memberId:i.member_id,plan:c.plan_id,amount:i.amount_cents/100,amountCents:i.amount_cents,paidCents:i.paid_cents,start:c.start_date,end:c.end_date,due:c.start_date,created:datePH(i.created_at)};}),
     memberships:cycles,payments:payments.map(paymentView),
     submissions:await Promise.all(submissions.map(async s=>({id:s.id,invoiceId:s.invoice_id,memberId:s.member_id,amount:s.amount_cents/100,method:s.method,reference:s.reference,status:s.status,receipt:await signedImage(client,s.receipt),date:datePH(s.created_at)}))),

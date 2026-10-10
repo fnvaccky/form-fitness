@@ -4,6 +4,7 @@ import { HttpError, fail, contacts, password, startDate, cents, imageData, today
 import { BUCKET, stateFor, planView, paymentView, userView, signedImage } from './state.js';
 import { fulfillRegistration } from './onboarding.js';
 import {createCheckout,reconcileCheckout,recoverCheckout,handleWebhook} from './paymongo.js';
+import {createStaff,updateStaff,setStaffEnabled,resendStaffSetup} from './staff.js';
 import { flushEmails } from './notifications.js';
 
 function send(res, status, data) { res.statusCode=status; res.end(JSON.stringify(data)); }
@@ -116,10 +117,16 @@ export async function handle(req,res,env=process.env) {
     // These two lists mirror the gate inside ff_private.command; edit them together.
     if(['/review-payment','/settings/payments','/settings/email','/plans','/manage-member','/email-retry'].includes(path))admin();
     if(['/members','/registration-payment','/registration-fulfill','/walkin-renew','/payments','/scan','/check-in'].includes(path))gymStaff();
+    // Staff management mirrors the gate inside ff_private.staff_admin.
+    if(path==='/staff'||path.startsWith('/staff/'))admin();
     if(path==='/login')return send(res,200,{ok:true,user:userView(profile)});
     if(path==='/state' && req.method==='GET')return send(res,200,await stateFor(client,profile,env));
     if(path==='/qr' && req.method==='GET')return send(res,200,await rpc('qr'));
     if(req.method!=='POST')fail('Endpoint not found.',404);
+    if(path==='/staff'){admin();return send(res,201,await createStaff(client,body,env,origin));}
+    if(path==='/staff/update'){admin();return send(res,200,await updateStaff(client,body));}
+    if(path==='/staff/enable'){admin();return send(res,200,await setStaffEnabled(client,body));}
+    if(path==='/staff/resend'){admin();return send(res,200,await resendStaffSetup(client,body,env,origin));}
     if(path==='/paymongo/checkout')return send(res,200,await createCheckout(client,body,env,origin));
     if(path==='/paymongo/status' || path==='/paymongo/recover'){
       if(path==='/paymongo/recover')admin();

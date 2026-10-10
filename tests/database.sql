@@ -178,6 +178,129 @@ select pg_temp.fails_with($q$select public.ff_command('scan',jsonb_build_object(
 select pg_temp.fails_with($q$select public.ff_command('check-in',jsonb_build_object('token','FORM2.bogus.bogus','confirmed',true))$q$,'Gym staff access is required','A member cannot record a check-in');
 select pg_temp.ok((select count(*)=0 from public.ff_profiles where role='staff'),'A member cannot see staff accounts in the roster');
 
+-- Staff management: one administrator-only boundary, an append-only audit trail, workspace isolation.
+reset role;
+create function pg_temp.state_of(statement text) returns text language plpgsql as $$
+declare st text;
+begin
+ begin execute statement; st:='00000';
+ exception when others then st:=SQLSTATE; end;
+ return st;
+end $$;
+select set_config('ff.sm',jsonb_build_object('admin',gen_random_uuid(),'adminSession',gen_random_uuid(),'admin2',gen_random_uuid(),'admin2Session',gen_random_uuid(),
+ 'prodAdmin',gen_random_uuid(),'prodAdminSession',gen_random_uuid(),'target',gen_random_uuid(),'targetSession',gen_random_uuid(),'target2',gen_random_uuid(),
+ 'freshSession',gen_random_uuid(),'authOnly',gen_random_uuid())::text,true);
+insert into auth.users(id,email,raw_app_meta_data,raw_user_meta_data)
+ select (current_setting('ff.sm')::jsonb->>k)::uuid,'ff-db-sm-'||lower(k)||'@example.invalid',
+ jsonb_build_object('ff_workspace',case when k='prodAdmin' then 'production' else 'demo' end,'ff_role',case when k like 'target%' then 'staff' else 'admin' end),
+ jsonb_build_object('form_fitness',true,'name','DB TEST Staff Admin '||k,'phone','09170000011')
+ from unnest(array['admin','admin2','prodAdmin','target','target2']) k;
+-- An Auth account with no RepReady profile, and a profile whose email differs from its Auth email.
+insert into auth.users(id,email) select (current_setting('ff.sm')::jsonb->>'authOnly')::uuid,'ff-db-sm-authonly@example.invalid';
+update public.ff_profiles set email='ff-db-sm-profileonly@example.invalid' where id=(current_setting('ff.sm')::jsonb->>'target2')::uuid;
+insert into auth.sessions(id,user_id) select (current_setting('ff.sm')::jsonb->>(k||'Session'))::uuid,(current_setting('ff.sm')::jsonb->>k)::uuid from unnest(array['admin','admin2','prodAdmin','target']) k;
+-- A pending registration holds its email until it is provisioned.
+insert into public.ff_registrations(workspace,request_id,name,email,phone,plan_id,plan_name,features,days,start_date,end_date,amount_cents,created_by)
+ select 'demo',gen_random_uuid(),'DB TEST Pending Staff Email','ff-db-sm-pending@example.invalid','09170000012','basic','Essential','[]',30,ff_private.today(),ff_private.today()+29,89900,(current_setting('ff.sm')::jsonb->>'admin')::uuid;
+
+-- Front-desk staff, members and anonymous callers never reach the staff boundary.
+select set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('ff.sm')::jsonb->>'target','role','authenticated','session_id',current_setting('ff.sm')::jsonb->>'targetSession')::text,true);
+set local role authenticated;
+select pg_temp.ok(pg_temp.state_of($q$select public.ff_staff_admin('prepare-create',jsonb_build_object('name','DB TEST New Staff','email','ff-db-sm-new@example.invalid','phone','09170000013'))$q$)='42501','Staff get 42501 from staff management');
+reset role;
+select set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('ff.test')::jsonb->>'member','role','authenticated','session_id',current_setting('ff.test')::jsonb->>'memberSession')::text,true);
+set local role authenticated;
+select pg_temp.ok(pg_temp.state_of($q$select public.ff_staff_admin('prepare-create',jsonb_build_object('name','DB TEST New Staff','email','ff-db-sm-new@example.invalid','phone','09170000013'))$q$)='42501','Members get 42501 from staff management');
+reset role;
+set local role anon;
+select set_config('ff.anon_state',pg_temp.state_of($q$select public.ff_staff_admin('get','{}')$q$),true);
+reset role;
+select pg_temp.ok(current_setting('ff.anon_state')='42501','Anonymous callers cannot execute staff management');
+
+-- prepare-create validates like ff_profiles, rejects every claimed email and writes nothing.
+select set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('ff.sm')::jsonb->>'admin','role','authenticated','session_id',current_setting('ff.sm')::jsonb->>'adminSession')::text,true);
+set local role authenticated;
+select pg_temp.ok((select public.ff_staff_admin('prepare-create',jsonb_build_object('name','  DB TEST New Staff ','email','FF-DB-SM-NEW@Example.invalid','phone','+63 917 000 0013'))
+ @> '{"workspace":"demo","name":"DB TEST New Staff","email":"ff-db-sm-new@example.invalid","phone":"09170000013"}'),'Admin prepare-create returns the admin''s workspace and normalized contacts');
+select pg_temp.ok((select count(*)=0 from public.ff_staff_audit where actor_id=(current_setting('ff.sm')::jsonb->>'admin')::uuid),'prepare-create writes nothing');
+select pg_temp.fails_with($q$select public.ff_staff_admin('prepare-create',jsonb_build_object('name','D','email','ff-db-sm-new@example.invalid','phone','09170000013'))$q$,'Enter a full name','prepare-create applies the profile name rule');
+select pg_temp.fails_with($q$select public.ff_staff_admin('prepare-create',jsonb_build_object('name','DB TEST New Staff','email','not-an-email','phone','09170000013'))$q$,'Enter a valid email address','prepare-create applies the profile email rule');
+select pg_temp.fails_with($q$select public.ff_staff_admin('prepare-create',jsonb_build_object('name','DB TEST New Staff','email','ff-db-sm-new@example.invalid','phone','12345'))$q$,'Mobile number is required','prepare-create applies the profile mobile rule');
+select pg_temp.fails_with($q$select public.ff_staff_admin('prepare-create',jsonb_build_object('name','DB TEST New Staff','email','FF-DB-SM-AUTHONLY@example.invalid','phone','09170000013'))$q$,'An account already uses this email','An Auth account without a profile blocks the email');
+select pg_temp.fails_with($q$select public.ff_staff_admin('prepare-create',jsonb_build_object('name','DB TEST New Staff','email','FF-DB-SM-PROFILEONLY@example.invalid','phone','09170000013'))$q$,'An account already uses this email','A profile email blocks the email in any letter case');
+select pg_temp.fails_with($q$select public.ff_staff_admin('prepare-create',jsonb_build_object('name','DB TEST New Staff','email','ff-db-sm-prodadmin@example.invalid','phone','09170000013'))$q$,'An account already uses this email','An account in another workspace blocks the email');
+select pg_temp.fails_with($q$select public.ff_staff_admin('prepare-create',jsonb_build_object('name','DB TEST New Staff','email','ff-db-sm-pending@example.invalid','phone','09170000013'))$q$,'An account already uses this email','A pending registration blocks the email');
+select pg_temp.fails_with($q$select public.ff_staff_admin('promote',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'target'))$q$,'Unknown staff action','Unknown actions are refused');
+
+-- log-create, get and update act only on staff in the administrator's workspace.
+select pg_temp.ok((select public.ff_staff_admin('log-create',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'target'))->>'role')='staff','log-create records a newly provisioned staff account');
+select pg_temp.fails_with($q$select public.ff_staff_admin('log-create',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'target'))$q$,'already recorded','log-create records each account once');
+select pg_temp.fails_with($q$select public.ff_staff_admin('log-create',jsonb_build_object('id',current_setting('ff.test')::jsonb->>'member'))$q$,'Staff member not found','Staff management never acts on a member');
+select pg_temp.ok((select public.ff_staff_admin('get',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'target'))->>'email')='ff-db-sm-target@example.invalid','get returns one staff profile');
+select pg_temp.fails_with($q$select public.ff_staff_admin('get',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'admin2'))$q$,'Administrators can''t be changed here','Staff management never acts on an administrator');
+select pg_temp.ok((select public.ff_staff_admin('update',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'target','name','DB TEST Renamed Staff','phone','09170000014','email','ff-db-sm-changed@example.invalid','role','admin','workspace','production'))->>'name')='DB TEST Renamed Staff','Admin updates a staff member''s name and mobile');
+select pg_temp.fails_with($q$select public.ff_staff_admin('update',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'target','name','DB TEST Renamed Staff','phone','12345'))$q$,'Mobile number is required','update applies the profile mobile rule');
+reset role;
+select pg_temp.ok((select name='DB TEST Renamed Staff' and phone='09170000014' and role='staff' and workspace='demo' and email='ff-db-sm-target@example.invalid' from public.ff_profiles where id=(current_setting('ff.sm')::jsonb->>'target')::uuid),'update never changes role, workspace or email');
+
+-- set-enabled: never an administrator, and disabling ends access at once.
+select set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('ff.sm')::jsonb->>'admin','role','authenticated','session_id',current_setting('ff.sm')::jsonb->>'adminSession')::text,true);
+set local role authenticated;
+select pg_temp.fails_with($q$select public.ff_staff_admin('set-enabled',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'admin','enabled',false))$q$,'can''t disable their own account','An administrator cannot disable themselves');
+select pg_temp.fails_with($q$select public.ff_staff_admin('set-enabled',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'admin2','enabled',false))$q$,'Administrators can''t be changed here','An administrator cannot disable another administrator');
+select pg_temp.fails_with($q$select public.ff_staff_admin('set-enabled',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'target','enabled','no'))$q$,'Choose whether the account is enabled','set-enabled requires a true or false value');
+select pg_temp.ok((select (public.ff_staff_admin('set-enabled',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'target','enabled',false))->>'enabled')::boolean=false),'Admin disables a staff account');
+reset role;
+select pg_temp.ok((select bool_and(enabled) from public.ff_profiles where id in ((current_setting('ff.sm')::jsonb->>'admin')::uuid,(current_setting('ff.sm')::jsonb->>'admin2')::uuid)),'Both administrators stay enabled');
+select pg_temp.ok((select count(*)=0 from auth.sessions where user_id=(current_setting('ff.sm')::jsonb->>'target')::uuid),'Disabling deletes every session of that staff member');
+-- Even a brand-new session gives a disabled staff member nothing.
+insert into auth.sessions(id,user_id) select (current_setting('ff.sm')::jsonb->>'freshSession')::uuid,(current_setting('ff.sm')::jsonb->>'target')::uuid;
+select set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('ff.sm')::jsonb->>'target','role','authenticated','session_id',current_setting('ff.sm')::jsonb->>'freshSession')::text,true);
+set local role authenticated;
+select pg_temp.ok(pg_temp.state_of($q$select public.ff_command('scan',jsonb_build_object('token','FORM2.bogus.bogus'))$q$)='42501','A disabled staff member cannot run any ff_command (42501)');
+select pg_temp.ok((select count(*)=0 from public.ff_profiles),'A disabled staff member reads nothing');
+reset role;
+select set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('ff.sm')::jsonb->>'admin','role','authenticated','session_id',current_setting('ff.sm')::jsonb->>'adminSession')::text,true);
+set local role authenticated;
+select pg_temp.ok((select (public.ff_staff_admin('set-enabled',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'target','enabled',true))->>'enabled')::boolean),'Admin re-enables a staff account');
+reset role;
+select set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('ff.sm')::jsonb->>'target','role','authenticated','session_id',current_setting('ff.sm')::jsonb->>'freshSession')::text,true);
+set local role authenticated;
+select pg_temp.ok(pg_temp.state_of($q$select public.ff_command('scan',jsonb_build_object('token','FORM2.bogus.bogus'))$q$) not in ('42501','00000'),'Re-enabling restores ff_command access');
+select pg_temp.ok((select count(*)>1 from public.ff_profiles),'Re-enabling restores roster access');
+select pg_temp.ok((select count(*)=0 from public.ff_staff_audit),'Staff cannot read the staff audit trail');
+reset role;
+
+-- resend: the audit row is the sending claim, so a second link within 60 seconds is refused.
+select set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('ff.sm')::jsonb->>'admin','role','authenticated','session_id',current_setting('ff.sm')::jsonb->>'adminSession')::text,true);
+set local role authenticated;
+select pg_temp.ok((select public.ff_staff_admin('resend',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'target'))->>'email')='ff-db-sm-target@example.invalid','Admin claims a setup-link resend');
+select pg_temp.ok(pg_temp.state_of($q$select public.ff_staff_admin('resend',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'target'))$q$)='PT429','A second resend within 60 seconds is refused (PT429)');
+select pg_temp.ok((select public.ff_staff_admin('get',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'target'))->>'lastResendAt') is not null,'get reports when the last setup link was sent');
+select pg_temp.ok((select array_agg(action order by action)=array['create','disable','enable','resend','update'] from public.ff_staff_audit where target_id=(current_setting('ff.sm')::jsonb->>'target')::uuid),'Each successful action writes exactly one audit row');
+select pg_temp.ok((select bool_and(actor_id=(current_setting('ff.sm')::jsonb->>'admin')::uuid and workspace='demo') from public.ff_staff_audit where target_id=(current_setting('ff.sm')::jsonb->>'target')::uuid),'Audit rows record the acting administrator and workspace');
+select pg_temp.ok((select (public.ff_staff_admin('set-enabled',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'target2','enabled',false))->>'enabled')::boolean=false),'Admin disables a second staff account');
+select pg_temp.fails_with($q$select public.ff_staff_admin('resend',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'target2'))$q$,'Enable this account','A disabled account gets no setup link');
+select pg_temp.must_fail($q$insert into public.ff_staff_audit(workspace,actor_id,target_id,action) values('demo',(current_setting('ff.sm')::jsonb->>'admin')::uuid,(current_setting('ff.sm')::jsonb->>'target')::uuid,'update')$q$,'Administrators cannot write the audit trail directly');
+reset role;
+set local role service_role;
+select set_config('ff.service_write',pg_temp.state_of($q$insert into public.ff_staff_audit(workspace,actor_id,target_id,action) values('demo',(current_setting('ff.sm')::jsonb->>'admin')::uuid,(current_setting('ff.sm')::jsonb->>'target')::uuid,'update')$q$),true);
+reset role;
+select pg_temp.ok(current_setting('ff.service_write')='42501','service_role cannot write the audit trail directly');
+
+-- Workspace isolation: another workspace's administrator cannot see or manage these staff.
+select set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('ff.sm')::jsonb->>'prodAdmin','role','authenticated','session_id',current_setting('ff.sm')::jsonb->>'prodAdminSession')::text,true);
+set local role authenticated;
+select pg_temp.ok((select public.ff_staff_admin('prepare-create',jsonb_build_object('name','DB TEST New Staff','email','ff-db-sm-new@example.invalid','phone','09170000013'))->>'workspace')='production','prepare-create always uses the administrator''s own workspace');
+select pg_temp.fails_with($q$select public.ff_staff_admin('get',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'target'))$q$,'Staff member not found','Another workspace''s administrator cannot read this staff member');
+select pg_temp.fails_with($q$select public.ff_staff_admin('set-enabled',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'target','enabled',false))$q$,'Staff member not found','Another workspace''s administrator cannot disable this staff member');
+select pg_temp.fails_with($q$select public.ff_staff_admin('update',jsonb_build_object('id',current_setting('ff.sm')::jsonb->>'target','name','DB TEST Hijack','phone','09170000015'))$q$,'Staff member not found','Another workspace''s administrator cannot edit this staff member');
+select pg_temp.ok((select count(*)=0 from public.ff_staff_audit where target_id=(current_setting('ff.sm')::jsonb->>'target')::uuid),'Another workspace''s administrator cannot read this audit trail');
+reset role;
+select set_config('request.jwt.claims',jsonb_build_object('sub',current_setting('ff.test')::jsonb->>'member','role','authenticated','session_id',current_setting('ff.test')::jsonb->>'memberSession')::text,true);
+set local role authenticated;
+select pg_temp.ok((select count(*)=0 from public.ff_staff_audit),'Members cannot read the staff audit trail');
+
 reset role;
 select count(*) as passed_checks,jsonb_agg(label) as checks from ff_test_log;
 rollback;

@@ -8,3 +8,5 @@
 
 .walkin-actions{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:18px}.plan-option .plan-privileges{color:var(--text)}
 .modal [hidden]{display:none!important}#checkout-link-qr{display:block;max-width:100%;margin:16px auto}.online-payment-help{margin:8px 0 18px}
+.badge.admin{color:#6a5a93;background:#eeeaf7}.badge.staff{color:#657e9d;background:#e7edf4}.badge.disabled{color:#7c7f79;background:#ececea}
+.staff-actions{display:flex;flex-wrap:wrap;gap:6px}.staff-locked{color:#8a8f87;font-size:11px}

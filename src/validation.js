@@ -3,15 +3,22 @@ export class HttpError extends Error {
 }
 export const fail = (message, status = 400) => { throw new HttpError(status, message); };
 export const today = () => new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
-export function contacts(body) {
-  const name = String(body.name || '').trim();
-  const email = String(body.email || '').trim().toLowerCase();
-  let phone = String(body.phone || '').replace(/[\s()-]/g, '');
+export function personName(value) {
+  const name = String(value || '').trim();
   if (name.length < 2 || name.length > 70 || /[<>\r\n]/.test(name)) fail('Enter a full name between 2 and 70 characters.');
-  if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(email) || email.length > 100) fail('Enter a valid email address.');
+  return name;
+}
+export function mobile(value) {
+  let phone = String(value || '').replace(/[\s()-]/g, '');
   if (!/^(09\d{9}|\+639\d{9})$/.test(phone)) fail('Mobile number is required. Use 09XXXXXXXXX or +639XXXXXXXXX.');
   if (phone.startsWith('+63')) phone = '0' + phone.slice(3);
-  return { name, email, phone };
+  return phone;
+}
+export function contacts(body) {
+  const name = personName(body.name);
+  const email = String(body.email || '').trim().toLowerCase();
+  if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(email) || email.length > 100) fail('Enter a valid email address.');
+  return { name, email, phone: mobile(body.phone) };
 }
 export function password(value) {
   if (typeof value !== 'string' || value.length < 12 || value.length > 128 || !/[a-z]/i.test(value) || !/\d/.test(value)) fail('Use 12–128 characters with a letter and a number.');
