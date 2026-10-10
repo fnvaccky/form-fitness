@@ -82,6 +82,12 @@ export async function handle(req,res,env=process.env) {
       // GoTrue /verify and saves the session through the cookie adapter. Unlike the PKCE code
       // exchange it needs no code verifier, so the link still works when the member opens their
       // email on a different device than the one they registered on.
+      // A link that lands on another host (for example Supabase's Site URL fallback) moves to the real
+      // domain first, so the session cookie is set there. The target is the fixed APP_ORIGIN, never a
+      // value from the request.
+      if((req.headers.host||'').toLowerCase()!==new URL(origin).host.toLowerCase()){
+        res.statusCode=302;res.setHeader('Location',origin+'/api/auth/callback'+url.search);return res.end();
+      }
       const type=url.searchParams.get('type')||'', tokenHash=url.searchParams.get('token_hash')||'', code=url.searchParams.get('code')||'';
       // Supabase's default email templates return ?code= instead. That exchange needs the verifier cookie
       // stored when the email was requested, so it only succeeds in the same browser.

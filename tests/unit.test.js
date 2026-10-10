@@ -662,3 +662,76 @@ test('editing staff never sends an email change',async()=>{
  await t.submit('staff-edit-form');
  assert.equal(t.calls[0].path,'/staff/update');assert.deepEqual(Object.keys(t.calls[0].body).sort(),['id','name','phone']);
 });
+
+// BUG-009: email links that land on the wrong host or path.
+test('a token link on any path is forwarded to the callback and kept out of history',async()=>{
+ const {readFile}=await import('node:fs/promises');const vm=await import('node:vm');
+ const source=await readFile('public/auth-link.js','utf8');
+ const run=(pathname,search)=>{
+  const calls={replace:[],replaceState:[]};
+  const ctx={URLSearchParams,location:{pathname,search,hash:'',replace:url=>calls.replace.push(url)},history:{replaceState:(state,title,url)=>calls.replaceState.push(url)}};
+  vm.createContext(ctx);vm.runInContext(source,ctx);
+  return {forwarded:vm.runInContext('authLinkForwarded',ctx),calls};
+ };
+ for(const [path,type] of [['/','recovery'],['/','invite'],['/members','signup'],['/some/deep/path','email']]){
+  const r=run(path,`?token_hash=abc123&type=${type}`);
+  assert.equal(r.forwarded,true,`${path} ${type}`);
+  assert.deepEqual(r.calls.replace,[`/api/auth/callback?token_hash=abc123&type=${type}`]);
+  assert(r.calls.replaceState.length===1&&!r.calls.replaceState[0].includes('abc123'),'the token is stripped from the current history entry');
+ }
+ for(const [path,search] of [['/',''],['/','?token_hash=abc123'],['/','?token_hash=abc123&type=bogus'],['/','?type=recovery'],['/api/auth/callback','?token_hash=abc123&type=recovery']]){
+  const r=run(path,search);
+  assert.equal(r.forwarded,false,`${path}${search}`);assert.equal(r.calls.replace.length,0);
+ }
+});
+test('the sign-in page never renders while a token link is being forwarded',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const html=await readFile('public/index.html','utf8'),connected=await readFile('public/connected.js','utf8');
+ assert.equal([...html.matchAll(/<script src="([^"]+)"/g)].map(m=>m[1])[0],'/auth-link.js','auth-link.js runs before every other script');
+ assert.match(connected,/async function boot\(\)\{if\(authLinkForwarded\)return;/,'boot renders nothing after forwarding');
+});
+test('a callback opened on another host is redirected to APP_ORIGIN before any verification',async()=>{
+ const verified=[];
+ const supabase=http.createServer(async(req,res)=>{for await(const chunk of req);verified.push(req.url);res.statusCode=500;res.end('{}');});
+ await new Promise(resolve=>supabase.listen(0,'127.0.0.1',resolve));
+ const appOrigin='https://repready-gym.example';
+ const server=http.createServer((req,res)=>handle(req,res,{SUPABASE_URL:`http://127.0.0.1:${supabase.address().port}`,SUPABASE_PUBLISHABLE_KEY:'publishable-placeholder',APP_ORIGIN:appOrigin}));
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ const get=(path,host)=>new Promise((resolve,reject)=>http.get({host:'127.0.0.1',port:server.address().port,path,headers:{host}},res=>{res.resume();resolve(res);}).on('error',reject));
+ try{
+  for(const host of ['form-fitness-achillespasuncion-2666.vercel.app','evil.example',`127.0.0.1:${server.address().port}`]){
+   for(const query of ['?token_hash=abc123&type=recovery','?token_hash=abc123&type=invite','?code=pkce-code']){
+    const res=await get('/api/auth/callback'+query,host);
+    assert.equal(res.statusCode,302,`${host}${query}`);
+    assert.equal(res.headers.location,appOrigin+'/api/auth/callback'+query,'the fixed APP_ORIGIN, with the query intact');
+    assert.equal(res.headers['set-cookie'],undefined,'no session cookie on the wrong host');
+   }
+  }
+  assert.equal(verified.length,0,'nothing is verified on the wrong host');
+ }finally{server.close();supabase.close();}
+});
+test('a callback on the APP_ORIGIN host still verifies as before',async()=>{
+ const encode=value=>Buffer.from(JSON.stringify(value)).toString('base64url');
+ const expires=Math.floor(Date.now()/1000)+3600,userId='11111111-2222-3333-4444-555555555555';
+ const accessToken=`${encode({alg:'HS256',typ:'JWT'})}.${encode({sub:userId,aud:'authenticated',exp:expires,session_id:'66666666-7777-8888-9999-000000000000'})}.test-signature`;
+ const verified=[];
+ const supabase=http.createServer(async(req,res)=>{let raw='';for await(const chunk of req)raw+=chunk;verified.push(JSON.parse(raw||'{}'));res.setHeader('Content-Type','application/json');
+  res.end(JSON.stringify({access_token:accessToken,token_type:'bearer',expires_in:3600,expires_at:expires,refresh_token:'fake-refresh-token',user:{id:userId,aud:'authenticated',role:'authenticated',email:'right-host@example.invalid',app_metadata:{},user_metadata:{},created_at:new Date().toISOString()}}));});
+ await new Promise(resolve=>supabase.listen(0,'127.0.0.1',resolve));
+ let appOrigin='';
+ const server=http.createServer((req,res)=>handle(req,res,{SUPABASE_URL:`http://127.0.0.1:${supabase.address().port}`,SUPABASE_PUBLISHABLE_KEY:'publishable-placeholder',APP_ORIGIN:appOrigin}));
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ appOrigin=`http://repready.test:${server.address().port}`;
+ try{
+  const res=await new Promise((resolve,reject)=>http.get({host:'127.0.0.1',port:server.address().port,path:'/api/auth/callback?token_hash=right-host&type=recovery',headers:{host:new URL(appOrigin).host}},r=>{r.resume();resolve(r);}).on('error',reject));
+  assert.equal(res.statusCode,303);assert.equal(res.headers.location,appOrigin+'/#/set-password');
+  assert((res.headers['set-cookie']||[]).some(cookie=>/HttpOnly/i.test(cookie)),'session cookie set on the real host');
+  assert.equal(verified.at(-1).token_hash,'right-host');
+ }finally{server.close();supabase.close();}
+});
+test('the setup email greets an account without a name properly',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const template=await readFile('supabase/templates/recovery.html','utf8');
+ assert(template.includes('{{ if .Data.name }}Hello {{ .Data.name }},{{ else }}Hello,{{ end }}'));
+ assert.equal(template.split('{{ .Data.name }}').length-1,1,'the name is printed only inside the conditional');
+});
