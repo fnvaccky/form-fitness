@@ -185,7 +185,7 @@ Mutation checks: removing the helper, the focus guard, hide-on-submit, the brows
 Live dependency: the hosted Supabase password settings must match, with a minimum of 8 and "Lowercase, uppercase letters, digits and symbols". Until then, Supabase's old 12-character minimum still refuses 8–11 character passwords.
 Released: 2026-10-11. `main` was fast-forwarded to `882833e`, and Production deployment `dpl_FGh61nEvxhBiui3ijR92hN4vkLiD` is READY. Smoke tests pass, including a live browser check of the sign-in eye button and the Set your password checklist.
 
-## FEATURE-003: Admin "Cancel checkout"   (status: built — waiting for Clark's "go")
+## FEATURE-003: Admin "Cancel checkout"   (status: released)
 Requested: 2026-10-11 by Clark (Task 09 Part B). Where: Payments → Online payments in progress, role: admin.
 Why: six live checkouts are stuck in `needs_review` (`checkout_reference_mismatch`, BUG-005), with active PayMongo sessions and 0 payments. While open they block online, cash and receipt payments on 5 invoices and 1 registration. Recover existing checkout only rebinds a checkout to `pending`, so it stays open and still blocks cash.
 What changed:
@@ -206,3 +206,4 @@ Test added:
 - Mutation checks: removing the admin gate, the confirming read, the no-change-on-failure rule, the 400 re-read or the paid check, and in the database the admin check, the session check, the closed-checkout check or the audit entry, each fail a test.
 - The mocked suite's cleanup now also removes accounts provisioned before a failed assertion. One interrupted run had left a local test payment behind.
 Live steps after "go": push the migration, release, smoke-test. Then Clark cancels the six live checkouts from the admin screen; Claude does not.
+Released 2026-10-12 after Clark's "go". The migration was pushed (16 versions match; all 19 post-push checks match local), `main` was fast-forwarded to `7ea3758`, and Production deployment `dpl_HmwpePzBHU2t4EoGNvNUVPSkHUnS` is READY. Smoke tests pass, and no live checkout was changed by the release. Clark has yet to cancel the six stuck checkouts and to run Check payment status on `4cbb49ad…`, which PayMongo shows as paid.
