@@ -148,7 +148,7 @@ Phishing check of the sign-in and set-password screens (no design changes):
 - `public/connected.js`, which every page loads, still contains an unused "Connect Gmail" form with a "Google app password" field and a link to `myaccount.google.com`. It is overridden and never rendered.
 - At phone width the sign-in headline reads "chapterstarts here." because `public/connected.css:3` hides the line break.
 
-## FEATURE-002: Password rule and show-password toggle   (status: built)
+## FEATURE-002: Password rule and show-password toggle   (status: released)
 Requested: 2026-10-11 by Clark. Where: every screen that sets a password (Set your password from a setup or reset link, Change password, and the unused registration "Create password" field), plus the sign-in form, role: everyone.
 Why: one clear password rule everywhere, guidance while typing, and a way to check what was typed.
 What changed:
@@ -177,3 +177,4 @@ And the new `tests/password-fields.js` (`npm run test:passwords`, Edge):
 Also updated test passwords in `tests/staff.js`, `tests/auth-links.js` and the BUG-011 unit tests to meet the rule.
 Mutation checks: removing the helper, the focus guard, hide-on-submit, the browser check, live updates or the spoken state each fail a browser test. The caret restore guards browsers that move the caret when a field changes type. Edge keeps the caret anyway, so no test here fails without it.
 Live dependency: the hosted Supabase password settings must match, with a minimum of 8 and "Lowercase, uppercase letters, digits and symbols". Until then, Supabase's old 12-character minimum still refuses 8–11 character passwords.
+Released: 2026-10-11. `main` was fast-forwarded to `882833e`, and Production deployment `dpl_FGh61nEvxhBiui3ijR92hN4vkLiD` is READY. Smoke tests pass, including a live browser check of the sign-in eye button and the Set your password checklist.
