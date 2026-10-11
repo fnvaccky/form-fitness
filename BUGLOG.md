@@ -207,3 +207,26 @@ Test added:
 - The mocked suite's cleanup now also removes accounts provisioned before a failed assertion. One interrupted run had left a local test payment behind.
 Live steps after "go": push the migration, release, smoke-test. Then Clark cancels the six live checkouts from the admin screen; Claude does not.
 Released 2026-10-12 after Clark's "go". The migration was pushed (16 versions match; all 19 post-push checks match local), `main` was fast-forwarded to `7ea3758`, and Production deployment `dpl_HmwpePzBHU2t4EoGNvNUVPSkHUnS` is READY. Smoke tests pass, and no live checkout was changed by the release. Clark has yet to cancel the six stuck checkouts and to run Check payment status on `4cbb49ad…`, which PayMongo shows as paid.
+
+## BUG-012: "Password couldn't be saved" hid the real reason   (status: fixed)
+Reported: 2026-10-12 by Clark. Where: Set your password from a setup or reset link (and its retry), role: new staff or member.
+What happened: The passwords met the app's rule (all five checklist items ticked) but were 9 and 11 characters long. `/api/auth/verify` answered 422 "Your link worked, but this password couldn't be saved. Choose a different one and save again.", and the retry through `/api/set-password` answered 400 "The password could not be updated. Reauthenticate and try again."
+Root cause: the hosted Supabase Auth settings still differ from the app rule (FEATURE-002, 8 characters and four character kinds). They were read with the Management API (`GET /v1/projects/ivxbrhqqfgmhfpgpauzh/config/auth`, using the existing CLI login; read-only, no token printed):
+- `password_min_length` **12**, and `password_required_characters` **none**;
+- secure password change and leaked-password protection are both off.
+So Supabase refused the passwords in `client.auth.updateUser` with `weak_password` ("Password should be at least 12 characters."), and `src/api.js` threw that reason away.
+Fix: `passwordRefusal` in `src/validation.js` maps Supabase's refusal to a clear message, and `src/api.js` uses it on `/auth/verify`, `/set-password` and `/password`.
+- `weak_password` gets Supabase's own reasons, for example "The account server needs at least 12 characters.", "…a lowercase letter, an uppercase letter, a number and a symbol." or a breached-password message.
+- `same_password` gets "Choose a password different from your current one."
+- An expired session (`session_not_found`, `reauthentication_needed` and the like) gets "Your link expired. Request a new one." with 410, and the screen shows it with its Forgot password button, after the link save or its retry. On Change password, where there is no link, it reads "Your sign-in expired. Sign in again, then change your password." (401).
+- The link save keeps its 422-then-retry behaviour, with the same message on both. Unknown errors keep the generic messages, and nothing echoes the password.
+- `DEPLOYMENT.md` says the hosted password settings must match the app rule.
+- Config change Clark is making, in the dashboard: minimum password length **8**, password requirements **Lowercase, uppercase letters, digits and symbols**. Until then, 8–11 character passwords are refused, now with that reason shown.
+Test added: `tests/unit.test.js`:
+- "Save password from a link says why the account server refused the password";
+- "the retry and Change password give the same reasons" (both cover weak length, weak character kinds, both together, breached, same password, a missing session and reauthentication; nothing echoes the password);
+- "an unknown account-server refusal keeps the generic message";
+- "the app password rule is 8 characters plus all four character kinds, and the local Auth settings match it";
+- "the set-password screen shows an expired link, with Forgot password, after the link or its retry".
+BUG-011's refusal test now expects the specific reason. Also checked against the real local Supabase Auth: reusing the current password gives "Choose a password different from your current one." on the link save (422), the retry (400) and Change password (400).
+Mutation checks: hiding refusals again, dropping the same-password or expired-session mapping, ignoring Supabase's length, the retry's missing expired screen, and Change password saying "link" each fail a test.
