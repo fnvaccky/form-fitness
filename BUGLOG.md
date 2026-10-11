@@ -119,6 +119,8 @@ Fix: `c9df15a`.
 - **Save password** sends one `POST /api/auth/verify` with the token and the new password. The password rules are checked first, so a refused password leaves the link usable. Then the token is verified, the account passes the same gate as `/set-password`, the password is set and other sessions end.
 - A used or expired link gets 410 "This link expired or was already used — request a new one." The screen shows that message with a **Forgot password** button. If the link worked but Auth refuses the password, the session is kept so the person can save again.
 - Unchanged: the origin check on every POST, APP_ORIGIN host forwarding, no token in any HTML, `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
+- Released 2026-10-11. `main` was fast-forwarded to `292011f`, and Production deployment `dpl_4QaLSu3DG9agV5uSjcjCpV8VhHD5` is READY. Smoke tests pass, including a live browser run with a fake token through both the direct link and the old host's root path.
+- The google-site-verification tag had not arrived, and Clark chose to release without it. It follows in a small release.
 Test added: `tests/unit.test.js`:
 - "the callback never verifies on GET: every token link moves to the set-password screen with the token in the fragment";
 - "a scanned setup link still works: Save password verifies it and sets the password in one POST, once";
