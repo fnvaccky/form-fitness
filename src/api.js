@@ -3,7 +3,7 @@ import { serverClient, serviceClient, configuration, result } from './supabase.j
 import { HttpError, fail, contacts, password, startDate, cents, imageData, today } from './validation.js';
 import { BUCKET, stateFor, planView, paymentView, userView, signedImage } from './state.js';
 import { fulfillRegistration } from './onboarding.js';
-import {createCheckout,reconcileCheckout,recoverCheckout,handleWebhook} from './paymongo.js';
+import {createCheckout,reconcileCheckout,recoverCheckout,cancelCheckout,handleWebhook} from './paymongo.js';
 import {createStaff,updateStaff,setStaffEnabled,resendStaffSetup} from './staff.js';
 import { flushEmails } from './notifications.js';
 
@@ -139,13 +139,14 @@ export async function handle(req,res,env=process.env) {
     if(path==='/staff/enable'){admin();return send(res,200,await setStaffEnabled(client,body));}
     if(path==='/staff/resend'){admin();return send(res,200,await resendStaffSetup(client,body,env,origin));}
     if(path==='/paymongo/checkout')return send(res,200,await createCheckout(client,body,env,origin));
-    if(path==='/paymongo/status' || path==='/paymongo/recover'){
-      if(path==='/paymongo/recover')admin();
+    if(path==='/paymongo/status' || path==='/paymongo/recover' || path==='/paymongo/cancel'){
+      if(path!=='/paymongo/status')admin();
       let checkout=result(await client.from('ff_checkouts').select('*').eq('id',body.id).maybeSingle());
       if(!checkout)fail('Checkout not found.',404);
       if(path==='/paymongo/recover'){
         return send(res,200,await recoverCheckout(checkout,body.sessionId,env,origin));
       }
+      if(path==='/paymongo/cancel')return send(res,200,await cancelCheckout(client,checkout,env,origin));
       return send(res,200,await reconcileCheckout(checkout,env,origin));
     }
     if(path==='/members') {

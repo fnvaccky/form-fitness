@@ -179,3 +179,15 @@ PayMongo requires a test key, a webhook secret, at least one supported method an
 The supplied demo webhook is https://repready-gym.vercel.app/api/paymongo/webhook. An anonymous POST currently reaches the application and returns 503 with missing webhook configuration; it does not redirect to Vercel Authentication. The new local code is not deployed. Configure a TEST `checkout_session.payment.paid` webhook, server-only environment variables, Supabase recovery template and Auth callback before the developer deploys. Keep existing Deployment Protection settings; the report documents a private automation bypass only if protection later blocks POST requests.
 
 The integration uses one durable `ff_checkouts` record per open target, raw-body HMAC verification, exact test-mode PHP amount/source checks, unique provider IDs and atomic service-only database settlement. Browser returns never prove payment. Creation timeouts remain reviewable; administrators recover the existing session by its internal reference instead of creating another charge opportunity. Notifications follow successful settlement, and delivery failure never erases payment. Real provider checkout, webhook delivery and inbox receipt remain manual test steps.
+
+### Cancel checkout (Task 09)
+
+An open online checkout blocks cash, receipt and new online payments for its invoice or registration. Administrators can close an unpaid one: **Payments → Online payments in progress → Cancel checkout**, then confirm. It needs migration `20261011120000_paymongo_cancel.sql`.
+
+- `POST /api/paymongo/cancel` is admin-only (`admin()`), and `ff_paymongo_cancel` checks the administrator again in the database before PayMongo is contacted.
+- The server re-reads the session from PayMongo and checks it is test mode, with `reference_number` equal to the checkout id. For a checkout that was never bound, it uses the session id saved at review.
+- If PayMongo shows a paid payment, nothing is cancelled: the normal settle path records it instead.
+- If PayMongo already shows the session expired, only the checkout here is marked expired. Otherwise the server calls `POST https://api.paymongo.com/v1/checkout_sessions/{id}/expire`, reads the session again, and marks the checkout expired only once PayMongo confirms it. PayMongo refuses (400) to expire a session that is paid or has a payment in progress.
+- If the call fails or the result is uncertain, nothing changes here and the error is shown.
+- Each cancel appends an entry to the checkout's `review_log`: who, when, PayMongo's response status and the session id.
+- A payment PayMongo still confirms after a cancel (webhook or Check payment status) is recorded, because `paymongo_settle` accepts an expired checkout. If the target was paid another way meanwhile, the payment goes to review instead of being credited twice.

@@ -24,14 +24,16 @@ function testCheckout(row,env){
  requirePaymongoTestMode(env);
  if(row?.workspace!==(env.APP_WORKSPACE||'production')||row.livemode!==false)fail('PayMongo checkout does not match the current workspace or test mode.',409);
 }
-async function provider(env,path,body){
+// One PayMongo request. A failure carries PayMongo's HTTP status (providerStatus) for the caller to judge.
+async function request(env,path,{method='GET',body}={}){
  requirePaymongoTestMode(env);
  let response;
- try{response=await fetch('https://api.paymongo.com'+path,{method:body?'POST':'GET',headers:{Authorization:'Basic '+Buffer.from(env.PAYMONGO_SECRET_KEY+':').toString('base64'),'Content-Type':'application/json',Accept:'application/json'},...(body?{body:JSON.stringify({data:{attributes:body}})}:{}),signal:AbortSignal.timeout(15000)});}catch{fail('PayMongo could not be reached. Check the existing checkout before trying again.',502);}
+ try{response=await fetch('https://api.paymongo.com'+path,{method,headers:{Authorization:'Basic '+Buffer.from(env.PAYMONGO_SECRET_KEY+':').toString('base64'),'Content-Type':'application/json',Accept:'application/json'},...(body?{body:JSON.stringify({data:{attributes:body}})}:{}),signal:AbortSignal.timeout(15000)});}catch{fail('PayMongo could not be reached. Check the existing checkout before trying again.',502);}
  let value;try{value=await response.json();}catch{fail('PayMongo returned an unreadable response. Check the existing checkout.',502);}
- if(!response.ok){const error=new HttpError(502,'PayMongo could not complete this request.');error.definiteRejection=[400,401,403,422].includes(response.status);throw error;}
- return value.data;
+ if(!response.ok){const error=new HttpError(502,'PayMongo could not complete this request.');error.definiteRejection=[400,401,403,422].includes(response.status);error.providerStatus=response.status;throw error;}
+ return {status:response.status,data:value.data};
 }
+async function provider(env,path,body){return (await request(env,path,{method:body?'POST':'GET',body})).data;}
 export function checkoutView(row){
  const recoverySessionId=row.review_reason==='checkout_reference_mismatch'&&SESSION_ID.test(row.review_details?.sessionId||'')?row.review_details.sessionId:'';
  return {id:row.id,status:row.status,url:validCheckoutUrl(row.checkout_url)?row.checkout_url:'',registrationId:row.registration_id,invoiceId:row.invoice_id,amount:row.amount_cents/100,reviewReason:row.review_reason||'',recoverySessionId};
@@ -166,6 +168,49 @@ export async function recoverCheckout(row,sessionId,env,origin){
   }
  }catch(error){return review(db,row,error);}
  return reconcileCheckout(row,env,origin);
+}
+// Task 09: an administrator closes an unpaid checkout so its invoice or registration can be paid another way.
+// PayMongo decides: a paid session is settled instead, and nothing changes here unless PayMongo confirms the
+// session is expired. A payment that still arrives later settles normally (paymongo_settle accepts expired).
+export async function cancelCheckout(client,row,env,origin){
+ testCheckout(row,env);
+ row=result(await client.rpc('ff_paymongo_cancel',{action:'check',body:{id:row.id}})); // the database checks the administrator too
+ const sessionId=row.session_id||row.review_details?.sessionId;
+ if(!SESSION_ID.test(sessionId||''))fail('This checkout has no PayMongo session to close. Check PayMongo for its reference before trying again.',409);
+ const db=serviceClient(env),candidate={...row,session_id:sessionId},methods=requirePaymongoTestMode(env).methods;
+ const read=async()=>{
+  const {status,data}=await request(env,'/v1/checkout_sessions/'+encodeURIComponent(sessionId));
+  try{return {status,session:data,paid:validateSession(data,candidate,methods)};}catch(error){return review(db,row,error);}
+ };
+ // Keeps the settlement's own message too, e.g. whether the member's account and setup email are done.
+ const settleInstead=async()=>{
+  const outcome=row.session_id?await reconcileCheckout(row,env,origin):await recoverCheckout(row,sessionId,env,origin);
+  return {...outcome,cancelled:false,message:['PayMongo shows this checkout was paid, so the payment was recorded instead of cancelling it.',outcome.message].filter(Boolean).join(' ')};
+ };
+ const close=async(providerStatus,via)=>{
+  row=result(await client.rpc('ff_paymongo_cancel',{action:'expire',body:{id:row.id,sessionId,providerStatus,via}}));
+  return {checkout:checkoutView(row),cancelled:true,message:'Checkout cancelled. The member can now pay another way.'};
+ };
+ let current=await read();
+ if(current.paid)return settleInstead();
+ if(current.session.attributes.status==='expired')return close(current.status,'already_expired');
+ let expired;
+ try{expired=await request(env,'/v1/checkout_sessions/'+encodeURIComponent(sessionId)+'/expire',{method:'POST'});}
+ catch(error){
+  // PayMongo answers 400 if the session is already expired, paid, or has a payment in progress: look again.
+  if(error.providerStatus===400){
+   current=await read();
+   if(current.paid)return settleInstead();
+   if(current.session.attributes.status==='expired')return close(current.status,'already_expired');
+   fail('PayMongo did not close this checkout, possibly because a payment is in progress. Nothing was changed. Check the payment status in a few minutes.',409);
+  }
+  fail(`PayMongo could not close this checkout${error.providerStatus?` (HTTP ${error.providerStatus})`:''}. Nothing was changed. Try again later.`,502);
+ }
+ // Confirm with a fresh read rather than trusting the response. A payment that slipped in is settled instead.
+ current=await read();
+ if(current.paid)return settleInstead();
+ if(current.session.attributes.status!=='expired')fail('PayMongo did not confirm the checkout is closed. Nothing was changed. Try again.',502);
+ return close(expired.status,'expire');
 }
 export function verifySignature(raw,header,env,now=Date.now()){
  requirePaymongoTestMode(env);

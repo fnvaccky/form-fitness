@@ -9,7 +9,7 @@ export const planView = p => ({ id:p.id, name:p.name, price:p.price_cents/100, p
 // permission from a role string. The database enforces the same split independently; this only
 // decides which existing controls are rendered.
 const CAPABILITIES = {
-  admin: ['roster','addMember','renew','recordCashPayment','recordOnlinePayment','initiateOnlinePayment','reviewPayment','scan','manageMember','manageStaff','plans','paymentSettings','systemSettings'],
+  admin: ['roster','addMember','renew','recordCashPayment','recordOnlinePayment','initiateOnlinePayment','reviewPayment','scan','manageMember','manageStaff','cancelCheckout','plans','paymentSettings','systemSettings'],
   staff: ['roster','addMember','renew','recordCashPayment','initiateOnlinePayment','scan'],
   member: ['initiateOnlinePayment']
 };

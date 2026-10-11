@@ -22,9 +22,18 @@ let staff,admin,other;
 const memberPassword='Local9!'+randomBytes(24).toString('base64url');
 const realFetch=globalThis.fetch,sessions=new Map();let count=0,origin,registrationId,memberId,browser;
 let providerFailure=false,earlyWebhook=false,createReplyHook;let lastCreate;
+// Cancel checkout: PayMongo refuses to expire a paid or expired session (400); expireFailure simulates an outage.
+let expireCalls=0,expireFailure=0,beforeExpire;
 globalThis.fetch=async(url,options)=>{
  if(!String(url).startsWith('https://api.paymongo.com/'))return realFetch(url,options);
  assert(options.headers.Authorization.startsWith('Basic '));
+ if(String(url).endsWith('/expire')){
+  expireCalls++;assert.equal(options.method,'POST');assert.equal(options.body,undefined,'expire has no body');
+  const s=sessions.get(String(url).split('/').at(-2));assert(s,'Existing session expired');await beforeExpire?.(s);
+  if(expireFailure)return Response.json({errors:[{code:'internal',detail:'Simulated outage.'}]},{status:expireFailure});
+  if(s.attributes.status==='expired'||(s.attributes.payments||[]).some(p=>p.attributes?.status==='paid'))return Response.json({errors:[{code:'parameter_invalid',detail:'Simulated refusal.'}]},{status:400});
+  s.attributes.status='expired';return Response.json({data:s});
+ }
  if(options.method==='POST'){
   const a=JSON.parse(options.body).data.attributes;lastCreate=a;assert.equal(a.pass_on_fees,false);assert.equal(a.line_items[0].currency,'PHP');assert.equal(a.line_items[0].quantity,1);
   const id='cs_Local'+(++count),session={id,type:'checkout_session',attributes:{...a,livemode:false,status:'active',checkout_url:'https://checkout.paymongo.com/'+id,payments:[]}};sessions.set(id,session);if(earlyWebhook){pay(id,'gcash');const response=await webhook(session);assert.equal(response.status,200,await response.text());}if(createReplyHook)await createReplyHook(session);if(providerFailure)throw Error('Mock lost create response');return Response.json({data:{id:session.id,type:'checkout_session',attributes:{checkout_url:session.attributes.checkout_url,livemode:session.attributes.livemode,created_at:123,updated_at:123}}});
@@ -188,6 +197,64 @@ try{
  oldSession.attributes.status='expired';assert.equal((await call('/paymongo/status',{id:oldRow.id})).checkout.status,'expired');
  assert.equal(result(await db.from('ff_registrations').select('status').eq('id',oldCreate.registration.id).single()).status,'awaiting_payment');
  console.log('PASS: saved-ID recovery strictly verifies GET, preserves audit history, clears only the old creation error and never creates or credits a second checkout');
+ // Task 09 Part B: Cancel checkout. Each case gets its own unpaid first registration with an open card checkout.
+ async function openCheckout(label){
+  await call('/login',staff);
+  const made=await call('/members',{requestId:randomUUID(),name:'LOCAL TEST Cancel '+label,email:'paymongo-cancel-'+randomUUID()+'@example.invalid',phone:'09170000004',plan:'basic',start:today()},201);extraRegistrations.push(made.registration.id);
+  const created=await call('/paymongo/checkout',{kind:'registration',registrationId:made.registration.id,emailConfirmed:true,method:'card',requestId:randomUUID()});
+  return {registration:made.registration,row:result(await db.from('ff_checkouts').select('*').eq('id',created.checkout.id).single())};
+ }
+ const registrationNow=async id=>{const r=result(await db.from('ff_registrations').select('status,member_id').eq('id',id).single());if(r.member_id&&!fixtures.includes(r.member_id))fixtures.push(r.member_id);return r;};
+ const checkoutNow=id=>db.from('ff_checkouts').select('*').eq('id',id).single().then(result);
+ const unpaid=await openCheckout('unpaid'),expiresAtStart=expireCalls;
+ await call('/paymongo/cancel',{id:unpaid.row.id},403);
+ await call('/login',other);await call('/paymongo/cancel',{id:unpaid.row.id},403);
+ assert.equal((await unprivileged.rpc('ff_paymongo_cancel',{action:'check',body:{id:unpaid.row.id}})).error.code,'42501','The database refuses staff too');
+ assert.equal(expireCalls,expiresAtStart,'Refused calls never reach PayMongo');
+ await call('/login',admin);
+ const cancelled=await call('/paymongo/cancel',{id:unpaid.row.id});
+ assert.equal(cancelled.cancelled,true);assert.equal(cancelled.checkout.status,'expired');
+ assert.equal(sessions.get(unpaid.row.session_id).attributes.status,'expired','PayMongo shows it expired');
+ const entry=(await checkoutNow(unpaid.row.id)).review_log.at(-1);
+ assert.deepEqual({action:entry.action,by:entry.by,providerStatus:entry.providerStatus,sessionId:entry.sessionId,via:entry.via},{action:'cancel',by:admin.id,providerStatus:200,sessionId:unpaid.row.session_id,via:'expire'});assert(entry.at);
+ await call('/paymongo/cancel',{id:unpaid.row.id},409);
+ const cash=await call('/registration-payment',{id:unpaid.registration.id,amount:unpaid.registration.amount_cents/100,method:'Cash',verified:true,emailConfirmed:true,idempotencyKey:randomUUID()});
+ assert.equal(cash.accountReady,true,'After the cancel the registration is paid in cash');assert.equal((await registrationNow(unpaid.registration.id)).status,'provisioned');
+ console.log('PASS: Cancel checkout: staff and members refused by the API and the database before PayMongo; unpaid → expired at PayMongo and here, with a review_log entry; then paid in cash');
+ const paid=await openCheckout('paid');pay(paid.row.session_id,'card');await call('/login',admin);
+ const expiresBeforePaid=expireCalls,settled=await call('/paymongo/cancel',{id:paid.row.id});
+ assert.equal(settled.cancelled,false);assert.equal(settled.checkout.status,'paid');assert.match(settled.message,/payment was recorded/);
+ assert.equal(expireCalls,expiresBeforePaid,'A paid session is never expired');assert.equal((await registrationNow(paid.registration.id)).status,'provisioned','The money that came in is recorded: '+JSON.stringify({accountReady:settled.accountReady,message:settled.message}));
+ const race=await openCheckout('race');await call('/login',admin);
+ beforeExpire=session=>pay(session.id,'card');
+ let raceOutcome;try{raceOutcome=await call('/paymongo/cancel',{id:race.row.id});}finally{beforeExpire=undefined;}
+ assert.equal(raceOutcome.cancelled,false);assert.equal(raceOutcome.checkout.status,'paid','A payment between the read and the expire is settled');
+ assert.equal(sessions.get(race.row.session_id).attributes.status,'active');assert.equal((await registrationNow(race.registration.id)).status,'provisioned');
+ const late=await openCheckout('late');await call('/login',admin);
+ assert.equal((await call('/paymongo/cancel',{id:late.row.id})).checkout.status,'expired');
+ pay(late.row.session_id,'card');assert.equal((await webhook(sessions.get(late.row.session_id))).status,200);
+ assert.equal((await checkoutNow(late.row.id)).status,'paid','A payment confirmed after the cancel is still recorded');assert.equal((await registrationNow(late.registration.id)).status,'provisioned');
+ console.log('PASS: Cancel checkout: a paid session is settled instead; a payment between the read and the expire is settled; a payment confirmed after the cancel is still recorded');
+ const stale=await openCheckout('stale');await call('/login',admin);sessions.get(stale.row.session_id).attributes.status='expired';
+ const expiresBeforeStale=expireCalls;
+ assert.equal((await call('/paymongo/cancel',{id:stale.row.id})).checkout.status,'expired');
+ assert.equal(expireCalls,expiresBeforeStale,'Already expired at PayMongo: no expire call');assert.equal((await checkoutNow(stale.row.id)).review_log.at(-1).via,'already_expired');
+ await call('/login',staff);
+ const stuck=await call('/members',{requestId:randomUUID(),name:'LOCAL TEST Cancel stuck',email:'paymongo-cancel-'+randomUUID()+'@example.invalid',phone:'09170000004',plan:'basic',start:today()},201);extraRegistrations.push(stuck.registration.id);
+ providerFailure=true;try{await call('/paymongo/checkout',{kind:'registration',registrationId:stuck.registration.id,emailConfirmed:true,method:'card',requestId:randomUUID()},502);}finally{providerFailure=false;}
+ const stuckSession='cs_Local'+count,stuckRow=result(await db.from('ff_checkouts').select('*').eq('registration_id',stuck.registration.id).single());
+ result(await db.rpc('ff_paymongo_review',{body:{id:stuckRow.id,category:'checkout_reference_mismatch',sessionId:stuckSession}}));
+ await call('/login',admin);
+ assert.equal((await call('/paymongo/cancel',{id:stuckRow.id})).checkout.status,'expired');
+ const unstuck=await checkoutNow(stuckRow.id);
+ assert.deepEqual([unstuck.session_id,unstuck.review_reason,unstuck.review_details.category,sessions.get(stuckSession).attributes.status],[stuckSession,null,'checkout_reference_mismatch','expired'],'The live stuck shape closes with its saved session');
+ const outage=await openCheckout('outage');await call('/login',admin);
+ const beforeOutage=await checkoutNow(outage.row.id);
+ expireFailure=500;try{const failed=await call('/paymongo/cancel',{id:outage.row.id},502);assert.match(failed.error,/Nothing was changed/);}finally{expireFailure=0;}
+ const afterOutage=await checkoutNow(outage.row.id);
+ assert.deepEqual([afterOutage.status,afterOutage.review_reason,afterOutage.review_log.length],[beforeOutage.status,beforeOutage.review_reason,beforeOutage.review_log.length],'A PayMongo failure changes nothing');
+ assert.equal(sessions.get(outage.row.session_id).attributes.status,'active');
+ console.log('PASS: Cancel checkout: an already expired session closes without an expire call; the live stuck shape closes with its saved session; a PayMongo failure changes nothing');
  await call('/login',staff);
  // Render all three selectors and a generated checkout QR in real Edge.
  browser=await chromium.launch({channel:'msedge',headless:true});const page=await browser.newPage();await page.route('https://checkout.paymongo.com/**',route=>route.fulfill({contentType:'text/html',body:'<h1>Simulated PayMongo checkout</h1>'}));await page.goto(origin);await page.getByLabel('Email address',{exact:true}).fill(staff.email);await page.getByLabel('Password',{exact:true}).fill(staff.password);await page.getByRole('button',{name:'Log in',exact:true}).click();await page.getByRole('button',{name:'Add member',exact:true}).waitFor();
@@ -241,9 +308,28 @@ try{
  assert.equal(result(await db.from('ff_checkouts').select('status').eq('id',returnedCheckout.checkout.id).single()).status,'expired');
  assert.equal(result(await db.from('ff_payments').select('id').eq('invoice_id',manualInvoice.invoiceId)).length,0,'Verified expiry releases target without recording payment');
  console.log('PASS: member manual/method filtering UI, real browser return stays unpaid, and verified expiry records no credit');
+ // The admin screen: Cancel checkout on open rows, behind a confirmation; staff never see it.
+ const screen=await openCheckout('screen');
+ const signIn=async(account)=>{const view=await (await browser.newContext()).newPage();await view.goto(origin);await view.getByLabel('Email address',{exact:true}).fill(account.email);await view.getByLabel('Password',{exact:true}).fill(account.password);await view.getByRole('button',{name:'Log in',exact:true}).click();await view.waitForFunction(()=>currentUser);await view.evaluate(()=>navigate('payments'));return view;};
+ const staffView=await signIn(staff);await staffView.locator(`[data-action="paymongo-open"][data-id="${screen.row.id}"]`).waitFor();
+ assert.equal(await staffView.locator('[data-action="paymongo-cancel"]').count(),0,'Staff never see Cancel checkout');
+ const adminView=await signIn(admin),rowCancel=adminView.locator(`[data-action="paymongo-cancel"][data-id="${screen.row.id}"]`);
+ await rowCancel.waitFor();await rowCancel.click();
+ await adminView.locator('.modal').getByText('This closes the PayMongo checkout so the member can pay another way. Only use it if the member has not paid.',{exact:true}).waitFor();
+ assert.equal(sessions.get(screen.row.session_id).attributes.status,'active','Nothing happens before confirming');
+ const cancelling=adminView.waitForResponse(r=>r.url().endsWith('/api/paymongo/cancel'));
+ await adminView.locator('.modal').getByRole('button',{name:'Cancel checkout',exact:true}).click();
+ assert.equal((await cancelling).status(),200);
+ await adminView.locator('#toast.show').filter({hasText:'Checkout cancelled'}).waitFor();
+ await rowCancel.waitFor({state:'detached'});assert.equal(sessions.get(screen.row.session_id).attributes.status,'expired');
+ await adminView.locator(`[data-action="registration-pay"][data-id="${screen.registration.id}"]`).waitFor();
+ await adminView.screenshot({path:'test-results/paymongo-cancel-checkout.png',fullPage:true});
+ console.log('PASS: Cancel checkout on the admin screen: confirmation first, then the row closes and the registration can be paid again; staff never see the button');
 }finally{
  if(browser)await browser.close();globalThis.fetch=realFetch;server.close();
  // Delete only UUIDs created by this suite, never historical/demo user records.
+ // Accounts provisioned before a failed assertion are cleaned up too, through their registrations.
+ for(const rid of [registrationId,...extraRegistrations].filter(Boolean)){const r=result(await db.from('ff_registrations').select('member_id').eq('id',rid).maybeSingle());if(r?.member_id&&!fixtures.includes(r.member_id))fixtures.push(r.member_id);}
  for(const rid of [registrationId,...extraRegistrations].filter(Boolean))result(await db.from('ff_checkouts').delete().eq('registration_id',rid));
  for(const uid of [memberId,...fixtures].filter(Boolean))result(await db.from('ff_checkouts').delete().eq('member_id',uid));
  for(const rid of [registrationId,...extraRegistrations].filter(Boolean))result(await db.from('ff_registrations').delete().eq('id',rid));

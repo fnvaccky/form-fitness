@@ -398,8 +398,8 @@ test('role capabilities are explicit and default-deny',async()=>{
   const {capabilitiesFor,userView}=await import('../src/state.js');
   const admin=capabilitiesFor('admin'),staff=capabilitiesFor('staff'),member=capabilitiesFor('member');
   for(const grant of ['roster','addMember','renew','recordCashPayment','initiateOnlinePayment','scan'])assert.equal(staff[grant],true,'staff should have '+grant);
-  for(const deny of ['recordOnlinePayment','reviewPayment','manageMember','plans','paymentSettings','systemSettings'])assert.notEqual(staff[deny],true,'staff must not have '+deny);
-  for(const grant of ['reviewPayment','plans','paymentSettings','systemSettings','manageMember','recordOnlinePayment'])assert.equal(admin[grant],true,'admin should have '+grant);
+  for(const deny of ['recordOnlinePayment','reviewPayment','manageMember','plans','paymentSettings','systemSettings','cancelCheckout'])assert.notEqual(staff[deny],true,'staff must not have '+deny);
+  for(const grant of ['reviewPayment','plans','paymentSettings','systemSettings','manageMember','recordOnlinePayment','cancelCheckout'])assert.equal(admin[grant],true,'admin should have '+grant);
   assert.equal(admin.initiateOnlinePayment,true);
   assert.deepEqual(member,{initiateOnlinePayment:true},'a member can start an owned checkout, with no console capabilities');
   assert.deepEqual(capabilitiesFor('unknown-role'),{},'an unknown role is denied everything');
@@ -414,6 +414,7 @@ function fakeSupabase(state){
     const url=new URL(req.url,'http://localhost');
     state.requests.push({method:req.method,path:url.pathname,body:raw?JSON.parse(raw):null});
     res.setHeader('Content-Type','application/json');
+    if(state.routes?.[url.pathname])return state.routes[url.pathname]({method:req.method,body:raw?JSON.parse(raw):null},res);
     if(url.pathname==='/auth/v1/token')return res.end(JSON.stringify(state.session));
     if(url.pathname==='/auth/v1/user')return res.end(JSON.stringify(state.session.user));
     if(url.pathname==='/auth/v1/logout'){res.statusCode=204;return res.end();}
@@ -425,18 +426,18 @@ function fakeSupabase(state){
     res.statusCode=404;return res.end('{}');
   });
 }
-async function consoleSession(role){
+async function consoleSession(role,{env:extraEnv={},routes}={}){
   const userId=`11111111-2222-3333-4444-55555555550${role==='admin'?1:role==='staff'?2:3}`;
   const encode=value=>Buffer.from(JSON.stringify(value)).toString('base64url');
   const expires=Math.floor(Date.now()/1000)+3600;
   const accessToken=`${encode({alg:'HS256',typ:'JWT'})}.${encode({sub:userId,aud:'authenticated',exp:expires,session_id:'66666666-7777-8888-9999-000000000000'})}.signature`;
   const user={id:userId,aud:'authenticated',role:'authenticated',email:`${role}@example.invalid`,app_metadata:{},user_metadata:{},created_at:new Date().toISOString()};
   const state={requests:[],session:{access_token:accessToken,token_type:'bearer',expires_in:3600,expires_at:expires,refresh_token:'fake-refresh',user},
-    profile:{id:userId,workspace:'production',role,name:`Test ${role}`,email:user.email,phone:'09170000001',enabled:true,goal:'',photo:'',created_at:new Date().toISOString()}};
+    profile:{id:userId,workspace:'production',role,name:`Test ${role}`,email:user.email,phone:'09170000001',enabled:true,goal:'',photo:'',created_at:new Date().toISOString()},routes};
   const supabase=fakeSupabase(state);
   await new Promise(resolve=>supabase.listen(0,'127.0.0.1',resolve));
   let origin='';
-  const api=http.createServer((req,res)=>handle(req,res,{SUPABASE_URL:`http://127.0.0.1:${supabase.address().port}`,SUPABASE_PUBLISHABLE_KEY:'publishable',SUPABASE_SECRET_KEY:'secret',APP_ORIGIN:origin,APP_WORKSPACE:'production'}));
+  const api=http.createServer((req,res)=>handle(req,res,{SUPABASE_URL:`http://127.0.0.1:${supabase.address().port}`,SUPABASE_PUBLISHABLE_KEY:'publishable',SUPABASE_SECRET_KEY:'secret',APP_ORIGIN:origin,APP_WORKSPACE:'production',...extraEnv}));
   await new Promise(resolve=>api.listen(0,'127.0.0.1',resolve));
   origin=`http://127.0.0.1:${api.address().port}`;
   const landing=await fetch(`${origin}/api/login`,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({email:user.email,password:'fake-password'})});
@@ -447,6 +448,84 @@ async function consoleSession(role){
     close(){api.close();supabase.close();}};
 }
 
+// Task 09 Part B: Cancel checkout, offline. PayMongo is a stub and the database calls go to the fake.
+// The stuck shape: needs_review, never bound, its PayMongo session id saved at review.
+async function cancelHarness(role,{status='active',expireStatus=200,afterExpire,reference}={}){
+  const row={id:'44444444-5555-6666-7777-888888888888',workspace:'production',livemode:false,status:'needs_review',session_id:null,review_reason:'checkout_reference_mismatch',
+    review_details:{category:'checkout_reference_mismatch',sessionId:'cs_UnitStuck'},amount_cents:89900,methods:['card'],invoice_id:'55555555-6666-7777-8888-999999999999',
+    registration_id:null,member_id:null,checkout_url:null,review_log:[],created_at:new Date().toISOString()};
+  const session={id:'cs_UnitStuck',type:'checkout_session',attributes:{livemode:false,status,reference_number:reference||row.id,payments:[]}};
+  const calls=[],cancelRpc=[],realFetch=globalThis.fetch;
+  globalThis.fetch=async(url,options={})=>{
+    if(!String(url).startsWith('https://api.paymongo.com/'))return realFetch(url,options);
+    const path=new URL(url).pathname;calls.push({method:options.method||'GET',path,body:options.body,auth:options.headers?.Authorization});
+    if(path.endsWith('/expire')){
+      if(expireStatus!==200)return Response.json({errors:[{code:'unit_refused',detail:'Refused by the stub.'}]},{status:expireStatus});
+      session.attributes.status='expired';afterExpire?.(session);return Response.json({data:session});
+    }
+    return Response.json({data:session});
+  };
+  const t=await consoleSession(role,{env:{PAYMONGO_SECRET_KEY:'sk_test_unitstub',PAYMONGO_WEBHOOK_SECRET:'unit-webhook-secret',PAYMONGO_ALLOW_LIVE:'false'},routes:{
+    '/rest/v1/ff_checkouts':(req,res)=>res.end(JSON.stringify([row])),
+    '/rest/v1/rpc/ff_paymongo_cancel':(req,res)=>{cancelRpc.push(req.body);res.end(JSON.stringify(req.body.action==='check'?row:{...row,status:'expired',session_id:req.body.body.sessionId,review_reason:null}));},
+    '/rest/v1/rpc/ff_paymongo_review':(req,res)=>res.end(JSON.stringify({...row,review_reason:req.body.body.category}))}});
+  return {...t,row,calls,cancelRpc,cancel:()=>t.post('/paymongo/cancel',{id:row.id}),close(){globalThis.fetch=realFetch;t.close();}};
+}
+const callList=calls=>calls.map(call=>`${call.method} ${call.path}`);
+test('only administrators can cancel a checkout: staff and members are refused before PayMongo is asked',async()=>{
+  for(const role of ['staff','member']){
+    const t=await cancelHarness(role);
+    try{
+      const response=await t.cancel();
+      assert.equal(response.status,403,role);
+      assert.deepEqual(t.calls,[],'PayMongo is never contacted');assert.deepEqual(t.cancelRpc,[],'the database is never asked');
+    }finally{t.close();}
+  }
+});
+test('Cancel checkout re-reads the session, expires it with a bodyless POST, confirms it, then records it',async()=>{
+  const t=await cancelHarness('admin');
+  try{
+    const response=await t.cancel(),body=await response.json();
+    assert.equal(response.status,200,body.error);
+    assert.equal(body.cancelled,true);assert.equal(body.checkout.status,'expired');
+    assert.deepEqual(callList(t.calls),['GET /v1/checkout_sessions/cs_UnitStuck','POST /v1/checkout_sessions/cs_UnitStuck/expire','GET /v1/checkout_sessions/cs_UnitStuck']);
+    assert.equal(t.calls[1].body,undefined,'the expire call has no body');assert.match(t.calls[1].auth,/^Basic /);
+    assert.deepEqual(t.cancelRpc.map(c=>c.action),['check','expire'],'the database checks first and records only after PayMongo confirms');
+    assert.deepEqual(t.cancelRpc[1].body,{id:t.row.id,sessionId:'cs_UnitStuck',providerStatus:200,via:'expire'});
+  }finally{t.close();}
+});
+test('a checkout PayMongo already expired is only closed here',async()=>{
+  const t=await cancelHarness('admin',{status:'expired'});
+  try{
+    const response=await t.cancel(),body=await response.json();
+    assert.equal(response.status,200,body.error);assert.equal(body.cancelled,true);
+    assert.deepEqual(callList(t.calls),['GET /v1/checkout_sessions/cs_UnitStuck'],'no expire call');
+    assert.deepEqual(t.cancelRpc[1].body,{id:t.row.id,sessionId:'cs_UnitStuck',providerStatus:200,via:'already_expired'});
+  }finally{t.close();}
+});
+test('if PayMongo does not confirm the expiry, the checkout is left unchanged and the error is shown',async()=>{
+  // 500: the call failed. 400 with the session still active: PayMongo refused, e.g. a payment is in progress.
+  // 200 but a fresh read still says active: uncertain.
+  for(const [options,status] of [[{expireStatus:500},502],[{expireStatus:400},409],[{afterExpire:session=>{session.attributes.status='active';}},502]]){
+    const t=await cancelHarness('admin',options);
+    try{
+      const response=await t.cancel(),body=await response.json();
+      assert.equal(response.status,status,JSON.stringify(options));
+      assert.match(body.error,/Nothing was changed/);
+      assert.deepEqual(t.cancelRpc.map(c=>c.action),['check'],'no expiry is recorded');
+    }finally{t.close();}
+  }
+});
+test('a PayMongo session that does not belong to the checkout is never expired',async()=>{
+  const t=await cancelHarness('admin',{reference:'99999999-8888-7777-6666-555555555555'});
+  try{
+    const response=await t.cancel();
+    assert.equal(response.status,409);
+    assert.deepEqual(callList(t.calls),['GET /v1/checkout_sessions/cs_UnitStuck'],'no expire call');
+    assert.deepEqual(t.cancelRpc.map(c=>c.action),['check']);
+    assert(t.state.requests.some(r=>r.path==='/rest/v1/rpc/ff_paymongo_review'&&r.body.body.category==='checkout_reference_mismatch'),'flagged for review like every other mismatch');
+  }finally{t.close();}
+});
 test('API authorization gate matches the staff permission matrix',async()=>{
   const staff=await consoleSession('staff');
   try{
