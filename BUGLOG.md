@@ -108,3 +108,40 @@ Test added: `tests/database.sql` (11 assertions) and the new `tests/email-unique
 - They cover every path, mixed case, the other workspace, the Auth trigger and both indexes, and confirm that normal registration and identical retries still work.
 - Two simultaneous registrations, in one workspace or across both, create exactly one.
 - Mutation checks: the old registration function, the old trigger and missing indexes each fail the matching assertion.
+
+## BUG-011: Staff setup link said "This link expired or was already used" on first click   (status: fixed)
+Reported: 2026-10-11 by Clark. Where: the link in a staff setup email (Supabase recovery email), role: new staff, signed out. At the same time, Google Safe Browsing started flagging `repready-gym.vercel.app` as phishing.
+What happened: The first click on the setup link showed "This link expired or was already used".
+Root cause: `GET /api/auth/callback` called `verifyOtp` on every GET (`src/api.js:102` before the fix), which uses up the one-time token. Link scanners (Google Safe Browsing, Gmail, Brave) open email links before the person does. So the scanner used the link and also received a valid recovery session for the account. Reproduced locally against the real GoTrue: a cookie-less "scanner" GET got 303 with a session cookie, and the person's click then got 400 "This link expired or was already used". The set-password screen (`passwordSetup` in `public/connected.js`) also verified a fragment token as soon as it opened, so a scanner that runs scripts would have used it up too.
+Fix: `c9df15a`.
+- `GET /api/auth/callback?token_hash&type` only redirects (303) to `/#/set-password?token_hash=…&type=…`. Browsers never send the fragment to a server or put it in a referrer. `?code=` still works in the browser that asked; a scanner without that browser's verifier cookie can't use the code up (checked against the real GoTrue).
+- `public/auth-link.js` reads the fragment token once, before any other script, keeps it in memory and strips it from the address bar and history. The root-path forwarder still goes through the callback, so BUG-009's APP_ORIGIN forwarding still applies.
+- **Save password** sends one `POST /api/auth/verify` with the token and the new password. The password rules are checked first, so a refused password leaves the link usable. Then the token is verified, the account passes the same gate as `/set-password`, the password is set and other sessions end.
+- A used or expired link gets 410 "This link expired or was already used — request a new one." The screen shows that message with a **Forgot password** button. If the link worked but Auth refuses the password, the session is kept so the person can save again.
+- Unchanged: the origin check on every POST, APP_ORIGIN host forwarding, no token in any HTML, `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
+Test added: `tests/unit.test.js`:
+- "the callback never verifies on GET: every token link moves to the set-password screen with the token in the fragment";
+- "a scanned setup link still works: Save password verifies it and sets the password in one POST, once";
+- "Save password refuses a bad request before the link is checked, so the link stays usable";
+- "if the link worked but the password is refused, the person is signed in and can save again";
+- "Save password reports a busy or unreachable Auth server as retryable, not as an expired link";
+- "a callback on the APP_ORIGIN host moves to the set-password screen without verifying" (replaces BUG-009's "still verifies as before");
+- "the set-password token is read from the fragment once, kept in memory and removed from the address bar";
+- "the set-password screen checks the link only when Save password is pressed".
+Also `tests/auth.js` (`npm run test:auth`, real local GoTrue):
+- scanner GETs leave the link valid, and Save password then succeeds once;
+- a second POST gets 410, no session and no password change;
+- `?code=` still works in the browser that asked, even after a scanner tried the code;
+- a Forgot password link (a PKCE token) works on another device.
+And the new `tests/auth-links.js` (`npm run test:links`, Edge):
+- a fetch scanner and two script-running scanners (on the link and on the root-path fallback) only reach the form;
+- the person then saves a password and is signed in;
+- the token appears in no address bar and no page, and in no request except the link itself and the Save password POST;
+- the used link shows the expired message, and its button opens Forgot password.
+Mutation checks: verifying on GET again, checking the password after verifying, 400 instead of 410, leaving the token in the address bar and verifying when the screen opens each fail a test.
+Phishing check of the sign-in and set-password screens (no design changes):
+- No form has an `action` or an external target. Every form posts with `fetch` to the same origin. Every script and stylesheet is first-party, and nothing loads from another site.
+- No other brand is imitated. Both screens name RepReady (the tab reads "RepReady · Sign in").
+- Two leftovers from the old FORM name: the favicon draws an "F" while the logo is an "R", and staff screens still say "FORM" in the scanner text and in export file names.
+- `public/connected.js`, which every page loads, still contains an unused "Connect Gmail" form with a "Google app password" field and a link to `myaccount.google.com`. It is overridden and never rendered.
+- At phone width the sign-in headline reads "chapterstarts here." because `public/connected.css:3` hides the line break.
