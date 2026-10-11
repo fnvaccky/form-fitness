@@ -147,3 +147,33 @@ Phishing check of the sign-in and set-password screens (no design changes):
 - Two leftovers from the old FORM name: the favicon draws an "F" while the logo is an "R", and staff screens still say "FORM" in the scanner text and in export file names.
 - `public/connected.js`, which every page loads, still contains an unused "Connect Gmail" form with a "Google app password" field and a link to `myaccount.google.com`. It is overridden and never rendered.
 - At phone width the sign-in headline reads "chapterstarts here." because `public/connected.css:3` hides the line break.
+
+## FEATURE-002: Password rule and show-password toggle   (status: built)
+Requested: 2026-10-11 by Clark. Where: every screen that sets a password (Set your password from a setup or reset link, Change password, and the unused registration "Create password" field), plus the sign-in form, role: everyone.
+Why: one clear password rule everywhere, guidance while typing, and a way to check what was typed.
+What changed:
+- **The rule:** 8–72 characters, with an uppercase letter (A–Z), a lowercase letter (a–z), a number and a keyboard symbol.
+  - It is defined once, in `public/password-rule.js`. The server enforces it in `src/validation.js` (`password()`) with "Use at least 8 characters with an uppercase letter, a lowercase letter, a number and a symbol." The screens take their checklist from the same file.
+  - The request said 8–128 characters, with any non-letter, non-digit character counting as a symbol. Checked against the real Supabase Auth: it refuses passwords over 72 characters (bytes). Its "symbols" setting counts only keyboard symbols (not a space, ₱ or ¡), and only A–Z counts as uppercase. Clark chose to match Supabase, so the checklist never approves a password Supabase refuses.
+- **The eye button:** `public/password-fields.js`, one shared helper loaded on every page, puts an eye button in every password input.
+  - The button is `type="button"`, reachable by keyboard, and its `aria-label` switches between "Show password" and "Hide password", with `aria-pressed`.
+  - Showing or hiding keeps focus, the caret position and `autocomplete`.
+  - Submitting a form hides its passwords again. A closed dialog takes its fields with it.
+  - Edge's own reveal button is hidden, so each field shows one eye.
+- **The checklist:** new-password inputs (marked `data-password-rule`) get a checklist under the field: 8+ characters, uppercase letter, lowercase letter, number, symbol.
+  - Each item has an icon and says "met" or "not met" to screen readers.
+  - The browser won't submit until the rule is met, and shows the server's message; the server checks again.
+  - The sign-in form has no checklist.
+- **Old limits removed:** the 12-character `minlength` and the "12 characters" hints are gone. New-password inputs have `maxlength="72"`.
+- **Local Supabase:** in `supabase/config.toml`, `minimum_password_length` went from 6 to 8, and `password_requirements` from "" to "lower_upper_letters_digits_symbols". The local stack was restarted. Server-generated passwords (staff, members, the admin and seed scripts) already meet the rule.
+Test added: `tests/unit.test.js`:
+- "the password rule: 8–72 characters with an uppercase letter, a lowercase letter, a number and a keyboard symbol". It accepts valid examples and all 32 keyboard symbols. It rejects each missing kind, 7, 73 and 129 characters, 74 bytes, and a space, ₱ or É used for the required kind.
+- "the API refuses a weak password even when the browser check is bypassed". `/set-password`, `/password` and `/auth/verify` answer 400 with the message, and Supabase Auth is never asked; the setup link stays usable.
+And the new `tests/password-fields.js` (`npm run test:passwords`, Edge):
+- the eye button works by mouse and keyboard, never submits, keeps focus, caret and `autocomplete`, and the sign-in form has no checklist;
+- the checklist ticks as the person types, and a weak password is stopped in the browser;
+- passwords are hidden after a submit, after a successful change and after the dialog closes;
+- Set your password has the same button and checklist.
+Also updated test passwords in `tests/staff.js`, `tests/auth-links.js` and the BUG-011 unit tests to meet the rule.
+Mutation checks: removing the helper, the focus guard, hide-on-submit, the browser check, live updates or the spoken state each fail a browser test. The caret restore guards browsers that move the caret when a field changes type. Edge keeps the caret anyway, so no test here fails without it.
+Live dependency: the hosted Supabase password settings must match, with a minimum of 8 and "Lowercase, uppercase letters, digits and symbols". Until then, Supabase's old 12-character minimum still refuses 8–11 character passwords.
