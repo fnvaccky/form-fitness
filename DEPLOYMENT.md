@@ -35,6 +35,8 @@ Auth URL configuration has been applied and verified.
 
 **Password rule (FEATURE-002):** every new password needs 8–72 characters, with an uppercase letter (A–Z), a lowercase letter (a–z), a number and a keyboard symbol (`! " # $ % & ' ( ) * + , - . / : ; < = > ? @ [ \ ] ^ _ ` { | } ~`). The rule is defined once in `public/password-rule.js`. The server enforces it in `src/validation.js`, and the set and change password screens show it as a checklist. It matches Supabase Auth, which refuses anything over 72 characters, so set the hosted project to the same rule: in Supabase Authentication, set the minimum password length to **8** and the password requirements to **Lowercase, uppercase letters, digits and symbols**. Locally, `supabase/config.toml` has `minimum_password_length = 8` and `password_requirements = "lower_upper_letters_digits_symbols"`; restart with `supabase stop` / `supabase start` after changing it.
 
+**The hosted password settings must match this rule** (BUG-012). On 2026-10-12 the hosted project still had a 12-character minimum and no character requirements, so Supabase refused 8–11 character passwords that the app accepts. The app now shows Supabase's reason, for example "The account server needs at least 12 characters.", and a unit test pins the app rule and the local `config.toml`. Only the dashboard setting removes the mismatch: minimum length **8**, requirements **Lowercase, uppercase letters, digits and symbols**.
+
 For future changes, in Supabase Authentication > URL Configuration, set the Site URL to the exact protected deployment used for real accounts. Add one exact callback URL per environment (avoid wildcard domains):
 
 - `http://localhost:4173/api/auth/callback`

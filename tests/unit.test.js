@@ -202,11 +202,11 @@ test('the callback never verifies on GET: every token link moves to the set-pass
 });
 
 // A fake GoTrue whose token_hash links work exactly once, like the real one.
-async function setupLinkServer({verifyStatus=0,rejectPassword=false}={}){
+async function setupLinkServer({verifyStatus=0,rejectPassword=false,passwordError=null}={}){
   const encode=value=>Buffer.from(JSON.stringify(value)).toString('base64url');
   const userId='33333333-4444-5555-6666-777777777777',expires=Math.floor(Date.now()/1000)+3600;
   const user={id:userId,aud:'authenticated',role:'authenticated',email:'new-staff@example.invalid',app_metadata:{},user_metadata:{},created_at:new Date().toISOString()};
-  const state={requests:[],unused:new Set(['one-time']),password:null,rejectPassword,
+  const state={requests:[],unused:new Set(['one-time']),password:null,rejectPassword,passwordError,
     session:{access_token:`${encode({alg:'HS256',typ:'JWT'})}.${encode({sub:userId,aud:'authenticated',exp:expires,session_id:'88888888-9999-0000-1111-222222222222'})}.test-signature`,
       token_type:'bearer',expires_in:3600,expires_at:expires,refresh_token:'fake-refresh-token',user},
     profile:{id:userId,workspace:'production',role:'staff',name:'New Staff',email:user.email,phone:'09170000009',enabled:true,goal:'',photo:'',created_at:new Date().toISOString()}};
@@ -221,6 +221,7 @@ async function setupLinkServer({verifyStatus=0,rejectPassword=false}={}){
       res.statusCode=403;return res.end(JSON.stringify({code:403,error_code:'otp_expired',msg:'Email link is invalid or has expired'}));
     }
     if(url.pathname==='/auth/v1/user'&&req.method==='PUT'){
+      if(state.passwordError){res.statusCode=state.passwordError.status;return res.end(JSON.stringify(state.passwordError.body));}
       if(state.rejectPassword){res.statusCode=422;return res.end(JSON.stringify({code:422,error_code:'same_password',msg:'New password should be different from the old password.'}));}
       state.password=body.password;return res.end(JSON.stringify(user));
     }
@@ -283,7 +284,7 @@ test('if the link worked but the password is refused, the person is signed in an
   try{
     const refused=await s.save({type:'recovery',tokenHash:'one-time',newPassword:'StrongPassword2026!'});
     assert.equal(refused.status,422);
-    assert.match((await refused.json()).error,/link worked, but this password couldn.t be saved/);
+    assert.deepEqual(await refused.json(),{error:'Choose a password different from your current one.'},'BUG-012: the real reason');
     const cookie=sessionCookies(refused).map(value=>value.split(';')[0]).join('; ');
     assert(cookie,'the verified session is kept for the retry');
     s.state.rejectPassword=false;
@@ -294,6 +295,77 @@ test('if the link worked but the password is refused, the person is signed in an
   }finally{s.close();}
 });
 
+// BUG-012: when Supabase Auth refuses a new password, say why, on the link, its retry and Change password.
+// The error bodies are Supabase Auth's own (v2.197). Nothing echoes the password.
+const AUTH_REFUSALS={
+  weakLength:{status:422,body:{code:422,error_code:'weak_password',msg:'Password should be at least 12 characters.',weak_password:{reasons:['length']}}},
+  weakKinds:{status:422,body:{code:422,error_code:'weak_password',msg:"Password should contain at least one character of each: abcdefghijklmnopqrstuvwxyz, ABCDEFGHIJKLMNOPQRSTUVWXYZ, 0123456789, !@#$%^&*()_+-=[]{};'\\:\"|<>?,./`~.",weak_password:{reasons:['characters']}}},
+  weakBoth:{status:422,body:{code:422,error_code:'weak_password',msg:"Password should be at least 12 characters. Password should contain at least one character of each: abcdefghijklmnopqrstuvwxyz, ABCDEFGHIJKLMNOPQRSTUVWXYZ, 0123456789.",weak_password:{reasons:['length','characters']}}},
+  breached:{status:422,body:{code:422,error_code:'weak_password',msg:'Password is known to be weak and easy to guess, please choose a different one.',weak_password:{reasons:['pwned']}}},
+  samePassword:{status:422,body:{code:422,error_code:'same_password',msg:'New password should be different from the old password.'}},
+  sessionGone:{status:403,body:{code:403,error_code:'session_not_found',msg:'Session from session_id claim in JWT does not exist'}},
+  reauthenticate:{status:400,body:{code:400,error_code:'reauthentication_needed',msg:'Password update requires reauthentication'}}
+};
+const REFUSAL_MESSAGES={
+  weakLength:'The account server needs at least 12 characters.',
+  weakKinds:'The account server needs a lowercase letter, an uppercase letter, a number and a symbol.',
+  weakBoth:'The account server needs at least 12 characters, with a lowercase letter, an uppercase letter and a number.',
+  breached:'The account server refuses this password because it is known to be weak or breached. Choose a different one.',
+  samePassword:'Choose a password different from your current one.'
+};
+const EXPIRED=['sessionGone','reauthenticate'],LINK_EXPIRED='Your link expired. Request a new one.',SIGN_IN_EXPIRED='Your sign-in expired. Sign in again, then change your password.';
+test('Save password from a link says why the account server refused the password',async()=>{
+  for(const [name,refusal] of Object.entries(AUTH_REFUSALS)){
+    const s=await setupLinkServer({passwordError:refusal});
+    try{
+      const response=await s.save({type:'recovery',tokenHash:'one-time',newPassword:'Secret9!pass'}),text=await response.text();
+      assert.equal(response.status,EXPIRED.includes(name)?410:422,name);
+      assert.deepEqual(JSON.parse(text),{error:EXPIRED.includes(name)?LINK_EXPIRED:REFUSAL_MESSAGES[name]},name);
+      assert(!text.includes('Secret9!pass'),'the password is never echoed');
+    }finally{s.close();}
+  }
+});
+test('the retry and Change password give the same reasons',async()=>{
+  for(const [name,refusal] of Object.entries(AUTH_REFUSALS)){
+    const t=await consoleSession('member',{routes:{'/auth/v1/user':(req,res)=>{
+      // consoleSession('member') signs in as this user; GET reads it, PUT (the password change) is refused.
+      if(req.method!=='PUT')return res.end(JSON.stringify({id:'11111111-2222-3333-4444-555555555503',aud:'authenticated',role:'authenticated',email:'member@example.invalid',app_metadata:{},user_metadata:{},created_at:new Date().toISOString()}));
+      res.statusCode=refusal.status;res.end(JSON.stringify(refusal.body));}}});
+    try{
+      const retry=await t.post('/set-password',{newPassword:'Secret9!pass'}),retryText=await retry.text();
+      assert.equal(retry.status,EXPIRED.includes(name)?410:400,'retry '+name);
+      assert.deepEqual(JSON.parse(retryText),{error:EXPIRED.includes(name)?LINK_EXPIRED:REFUSAL_MESSAGES[name]},'retry '+name);
+      const change=await t.post('/password',{currentPassword:'fake-password',newPassword:'Secret9!pass'}),changeText=await change.text();
+      assert.equal(change.status,EXPIRED.includes(name)?401:400,'change '+name);
+      assert.deepEqual(JSON.parse(changeText),{error:EXPIRED.includes(name)?SIGN_IN_EXPIRED:REFUSAL_MESSAGES[name]},'change '+name);
+      assert(!retryText.includes('Secret9!pass')&&!changeText.includes('Secret9!pass'),'the password is never echoed');
+    }finally{t.close();}
+  }
+});
+test('an unknown account-server refusal keeps the generic message',async()=>{
+  const s=await setupLinkServer({passwordError:{status:500,body:{code:500,msg:'Internal error'}}});
+  try{
+    const response=await s.save({type:'recovery',tokenHash:'one-time',newPassword:'Secret9!pass'});
+    assert.equal(response.status,422);
+    assert.match((await response.json()).error,/link worked, but this password couldn.t be saved/);
+  }finally{s.close();}
+});
+test('the app password rule is 8 characters plus all four character kinds, and the local Auth settings match it',async()=>{
+  const {readFile}=await import('node:fs/promises');
+  const rule=await import('../public/password-rule.js'),config=await readFile('supabase/config.toml','utf8');
+  assert.equal(rule.PASSWORD_MIN,8);
+  assert.deepEqual(rule.PASSWORD_CHECKS.map(check=>check.label),['8+ characters','Uppercase letter','Lowercase letter','Number','Symbol']);
+  // The hosted project must use the same values (DEPLOYMENT.md); otherwise Supabase refuses passwords the app accepts (BUG-012).
+  assert.match(config,/^minimum_password_length = 8$/m);
+  assert.match(config,/^password_requirements = "lower_upper_letters_digits_symbols"$/m);
+});
+test('the set-password screen shows an expired link, with Forgot password, after the link or its retry',async()=>{
+  const {readFile}=await import('node:fs/promises');
+  const connected=await readFile('public/connected.js','utf8');
+  const handler=connected.slice(connected.indexOf("'setup-password-form':"),connected.indexOf("'renew-form':"));
+  assert.equal(handler.split('return setupLinkExpired(e.message)').length-1,2,'both the link save and the retry');
+  assert.match(connected,/function setupLinkExpired\(message='This link expired or was already used — request a new one\.'\)/);
+});
 test('Save password reports a busy or unreachable Auth server as retryable, not as an expired link',async()=>{
   for(const [verifyStatus,status] of [[429,429],[500,503],[502,503]]){
     const s=await setupLinkServer({verifyStatus});

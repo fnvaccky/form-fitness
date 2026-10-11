@@ -26,6 +26,23 @@ export function password(value) {
   if (!passwordMeetsRule(value)) fail(PASSWORD_MESSAGE);
   return value;
 }
+// BUG-012: why Supabase Auth refused a new password, from its own error code and reasons. Returns null for
+// anything else. Supabase's messages never contain the password, and neither do these.
+const listed = items => items.length > 1 ? items.slice(0, -1).join(', ') + ' and ' + items.at(-1) : items[0];
+export function passwordRefusal(error) {
+  const code = error?.code || '', text = String(error?.message || '');
+  if (code === 'same_password') return { kind: 'same', message: 'Choose a password different from your current one.' };
+  if (['session_not_found', 'session_expired', 'reauthentication_needed', 'reauthentication_not_valid', 'bad_jwt', 'no_authorization'].includes(code) || error?.name === 'AuthSessionMissingError')
+    return { kind: 'expired' };
+  if (code !== 'weak_password' && error?.name !== 'AuthWeakPasswordError') return null;
+  const reasons = error.reasons || error.weak_password?.reasons || [];
+  if (reasons.includes('pwned')) return { kind: 'weak', message: 'The account server refuses this password because it is known to be weak or breached. Choose a different one.' };
+  const length = text.match(/at least (\d+) characters/i);
+  const kinds = [[/abcdefghijklmnopqrstuvwxyz/, 'a lowercase letter'], [/ABCDEFGHIJKLMNOPQRSTUVWXYZ/, 'an uppercase letter'], [/0123456789/, 'a number'], [/[!@#$%^&*]/, 'a symbol']]
+    .filter(([pattern]) => pattern.test(text)).map(([, name]) => name);
+  const needs = [length || reasons.includes('length') ? (length ? `at least ${length[1]} characters` : 'a longer password') : '', kinds.length ? listed(kinds) : ''].filter(Boolean);
+  return { kind: 'weak', message: needs.length ? `The account server needs ${needs.join(', with ')}.` : 'The account server refused this password. Choose a stronger one.' };
+}
 export function startDate(value, current = today()) {
   const last = new Date(current + 'T12:00:00Z'); last.setUTCDate(last.getUTCDate() + 365);
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(value)) || new Date(value).toISOString().slice(0, 10) !== value || value < current || value > last.toISOString().slice(0, 10)) fail('Choose a valid start date within the next year.');

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { serverClient, serviceClient, configuration, result } from './supabase.js';
-import { HttpError, fail, contacts, password, startDate, cents, imageData, today } from './validation.js';
+import { HttpError, fail, contacts, password, passwordRefusal, startDate, cents, imageData, today } from './validation.js';
 import { BUCKET, stateFor, planView, paymentView, userView, signedImage } from './state.js';
 import { fulfillRegistration } from './onboarding.js';
 import {createCheckout,reconcileCheckout,recoverCheckout,cancelCheckout,handleWebhook} from './paymongo.js';
@@ -186,9 +186,15 @@ export async function handle(req,res,env=process.env) {
         const {error}=await client.auth.signInWithPassword({email:profile.email,password:String(body.currentPassword||'')});if(error)fail('Current password is incorrect.',401);
       }
       const {error}=await client.auth.updateUser({password:body.newPassword});
-      // The link is used up by now, but its session cookie is set, so the screen retries through /set-password.
-      if(error && path==='/auth/verify')fail('Your link worked, but this password couldn’t be saved. Choose a different one and save again.',422);
-      if(error)fail('The password could not be updated. Reauthenticate and try again.');
+      if(error){
+        // BUG-012: say why the account server refused it, with the same reason on the link, its retry and Change password.
+        const refusal=passwordRefusal(error);
+        if(refusal?.kind==='expired')fail(path==='/password'?'Your sign-in expired. Sign in again, then change your password.':'Your link expired. Request a new one.',path==='/password'?401:410);
+        // A link is used up by now, but its session cookie is set, so the screen retries through /set-password (422).
+        if(refusal)fail(refusal.message,path==='/auth/verify'?422:400);
+        if(path==='/auth/verify')fail('Your link worked, but this password couldn’t be saved. Choose a different one and save again.',422);
+        fail('The password could not be updated. Reauthenticate and try again.');
+      }
       const signedOut=await client.auth.signOut({scope:'others'});if(signedOut.error)fail('Password changed, but other sessions could not be revoked. Contact the gym.',502);
       return send(res,200,{ok:true});
     }

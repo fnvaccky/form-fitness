@@ -85,7 +85,7 @@ async function passwordSetup(){
   if(!setupLink&&!currentUser)return openModal('Sign in to set your password','Open a fresh invitation or recovery link.','<p>The link may have expired. Request password recovery or contact your gym administrator.</p>',btn('Close','close'));
   openModal('Set your password','Choose a strong password for your account.',`<form id="setup-password-form">${field('New password *','setup-password','','password','required maxlength="72" autocomplete="new-password" data-password-rule')}<div class="form-error" id="form-error" role="alert"></div></form>`,`<button class="button primary" form="setup-password-form" type="submit">Save password</button>`);
 }
-function setupLinkExpired(){openModal('Set your password','Your setup link can’t be used.','<p>This link expired or was already used — request a new one.</p>',`${btn('Close','close')}<div class="right">${btn('Forgot password','forgot-password','primary')}</div>`);}
+function setupLinkExpired(message='This link expired or was already used — request a new one.'){openModal('Set your password','Your setup link can’t be used.',`<p>${esc(message)}</p>`,`${btn('Close','close')}<div class="right">${btn('Forgot password','forgot-password','primary')}</div>`);}
 selectPlan=function(id){
   const p=planOf(id),m=memberById(selectedMember);
   const last=(state.memberships||[]).filter(c=>c.member_id===m.id).map(c=>c.end_date).sort().at(-1)||m.end;
@@ -109,8 +109,8 @@ document.addEventListener('submit',event=>{
     'recovery-form':async()=>{const response=await api('/recovery',{email:document.getElementById('recovery-email').value});closeModal();toast(response.message);},
     'setup-password-form':async()=>{const newPassword=document.getElementById('setup-password').value,link=setupLink;
       // 410: the link is used up or expired. 422: it worked but the password was refused, so retry with its session.
-      if(link){try{await api('/auth/verify',{...link,newPassword});}catch(e){if(e.status===410||e.status===422)setupLink=null;if(e.status===410)return setupLinkExpired();throw e;}setupLink=null;}
-      else await api('/set-password',{newPassword});
+      if(link){try{await api('/auth/verify',{...link,newPassword});}catch(e){if(e.status===410||e.status===422)setupLink=null;if(e.status===410)return setupLinkExpired(e.message);throw e;}setupLink=null;}
+      else{try{await api('/set-password',{newPassword});}catch(e){if(e.status===410)return setupLinkExpired(e.message);throw e;}}
       history.replaceState({},'',location.pathname);closeModal();await installPaymongo();
 boot();toast('Password saved.');},
     'renew-form':async()=>{await api('/renew',{memberId:document.getElementById('renew-member').value,plan:document.getElementById('renew-plan').value,start:document.getElementById('renew-start').value});await refreshData();closeModal();navigate('payments');toast('Renewal invoice created. Payment is still required.');},
