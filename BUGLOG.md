@@ -39,6 +39,7 @@ Noticed: 2026-10-10 by Claude, during Task 06's read-only checks on live. Not re
 What happened: All six live PayMongo checkouts (production workspace, created 2–9 October; one for a registration, five for invoices) are `needs_review` with reason `checkout_reference_mismatch`. None was bound to its PayMongo session or paid. An open checkout blocks its target (`ff_private.guard_open_checkout`), so that registration and those five invoices can't be paid online, in cash or by receipt until each checkout is resolved.
 Root cause: the old Production code (`c550f1c`) ran the full check, including `reference_number`, on PayMongo's V2 create response, which omits that field, so every checkout failed right after creation. `adaab3f` (Batch 01) checks the reference only on GET and webhook, and is live since the `ed44803` release. Read-only GETs of the six sessions with the local test key (same PayMongo account) show each one `active`, in test mode, with 0 payments and `reference_number` equal to its checkout id. So nothing was paid, and each passes the released check.
 Fix: code already fixed (`adaab3f`, live). Each leftover row needs an administrator on the live site: Payments → Online payments in progress → Open / check → Recover existing checkout (the session ID is prefilled). That rebinds the session and makes the checkout `pending` and payable online; it creates and credits nothing. A `pending` checkout still blocks cash until it is paid or its PayMongo session expires. These are live writes, so they are Clark's call. Nothing was changed by Claude.
+Update 2026-10-11: FEATURE-003 adds Cancel checkout for exactly this. Once it is released, Clark closes these six from the admin screen (Payments → Online payments in progress → Cancel checkout); Claude does not.
 Test added: none new. `npm run test:paymongo` already covers "minimal V2 create without reference binds pending" and "saved-ID recovery strictly verifies GET". In Task 06, a real test-mode checkout created locally with the released code stayed cleanly `pending` after PayMongo's real GET, and a real GCash test payment settled as `paid`.
 
 ## BUG-006: No PayMongo webhook points at the live site   (status: noticed)
@@ -147,7 +148,7 @@ Phishing check of the sign-in and set-password screens (no design changes):
 - Two leftovers from the old FORM name: the favicon draws an "F" while the logo is an "R", and staff screens still say "FORM" in the scanner text and in export file names.
 - `public/connected.js`, which every page loads, still contains an unused "Connect Gmail" form with a "Google app password" field and a link to `myaccount.google.com`. It is overridden and never rendered.
 - At phone width the sign-in headline reads "chapterstarts here." because `public/connected.css:3` hides the line break.
-Update 2026-10-11 (Task 09 Part A): all four leftovers are fixed, and the old-host redirect no longer carries Vercel's `__path`/`path`.
+Update 2026-10-11 (Task 09 Part A): all four leftovers are fixed, and the old-host redirect no longer carries Vercel's `__path`/`path`. Released 2026-10-11: `main` `fa106e1`, deployment `dpl_4kidicr36C18krzv4BHsZ9CCe7fY`.
 - The favicon is the RepReady "R" mark, and there is an apple-touch-icon.
 - The user-visible "FORM" strings are gone.
 - The unused Gmail form and its Google link are gone.
@@ -183,3 +184,25 @@ Also updated test passwords in `tests/staff.js`, `tests/auth-links.js` and the B
 Mutation checks: removing the helper, the focus guard, hide-on-submit, the browser check, live updates or the spoken state each fail a browser test. The caret restore guards browsers that move the caret when a field changes type. Edge keeps the caret anyway, so no test here fails without it.
 Live dependency: the hosted Supabase password settings must match, with a minimum of 8 and "Lowercase, uppercase letters, digits and symbols". Until then, Supabase's old 12-character minimum still refuses 8–11 character passwords.
 Released: 2026-10-11. `main` was fast-forwarded to `882833e`, and Production deployment `dpl_FGh61nEvxhBiui3ijR92hN4vkLiD` is READY. Smoke tests pass, including a live browser check of the sign-in eye button and the Set your password checklist.
+
+## FEATURE-003: Admin "Cancel checkout"   (status: built — waiting for Clark's "go")
+Requested: 2026-10-11 by Clark (Task 09 Part B). Where: Payments → Online payments in progress, role: admin.
+Why: six live checkouts are stuck in `needs_review` (`checkout_reference_mismatch`, BUG-005), with active PayMongo sessions and 0 payments. While open they block online, cash and receipt payments on 5 invoices and 1 registration. Recover existing checkout only rebinds a checkout to `pending`, so it stays open and still blocks cash.
+What changed:
+- **The button:** administrators see Cancel checkout on open rows, behind the confirmation "This closes the PayMongo checkout so the member can pay another way. Only use it if the member has not paid." Staff and members never see it.
+- **Two checks:** `POST /api/paymongo/cancel` is gated with `admin()`. Migration `20261011120000_paymongo_cancel.sql` adds `ff_paymongo_cancel` (security definer). Its `check` step verifies the administrator and the open checkout before PayMongo is contacted. Its `expire` step records the cancel only after PayMongo confirms it, accepts only the checkout's own session, and appends a `review_log` entry: who, when, PayMongo's response status and the session id.
+- **PayMongo decides:** `cancelCheckout` in `src/paymongo.js` re-reads the session and checks test mode and that `reference_number` equals the checkout id.
+  - A paid session is settled through the normal path instead, never cancelled.
+  - A session PayMongo already expired is only closed here.
+  - Otherwise it calls `POST /v1/checkout_sessions/{id}/expire` (PayMongo's documented endpoint), then reads the session again.
+  - A failure or an uncertain result changes nothing, and the error is shown.
+- **The race:** PayMongo refuses (400) to expire a session that is paid or has a payment in progress, and the server then reads it again and settles. `paymongo_settle` does not refuse an expired checkout, so a payment confirmed after a cancel (webhook or Check payment status) is still recorded, and no settle change was needed. The cancel binds a never-bound checkout to its verified session so that this works for the stuck rows too.
+- **Admin message:** when a cancel turns into a settlement, the admin sees the settlement's own message too, for example whether the member's account and setup email are done.
+Test added:
+- `tests/paymongo-demo.sql` (17 new checks): staff and members are refused with 42501; an admin cannot cancel another workspace's checkout; another session, a missing status and an unknown outcome are refused; the audit entry; no second cancel; the stuck shape; cash blocked before and allowed after; a verified payment after the cancel is still recorded.
+- `tests/unit.test.js` (5 tests): staff and members are refused before PayMongo; the bodyless expire call followed by a confirming read; already expired; failures leave the checkout unchanged; a session for another checkout is never expired. The capability test now includes `cancelCheckout`.
+- `tests/paymongo.js` (4 new groups): unpaid becomes expired at PayMongo and here, then is paid in cash; a paid session is settled instead; both sides of the race; already expired; the live stuck shape; an outage changes nothing; and the admin screen.
+- A real PayMongo test-mode run locally: create a checkout, cancel it from the admin screen, PayMongo shows `expired`, then pay the registration in cash.
+- Mutation checks: removing the admin gate, the confirming read, the no-change-on-failure rule, the 400 re-read or the paid check, and in the database the admin check, the session check, the closed-checkout check or the audit entry, each fail a test.
+- The mocked suite's cleanup now also removes accounts provisioned before a failed assertion. One interrupted run had left a local test payment behind.
+Live steps after "go": push the migration, release, smoke-test. Then Clark cancels the six live checkouts from the admin screen; Claude does not.
