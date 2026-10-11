@@ -147,6 +147,11 @@ Phishing check of the sign-in and set-password screens (no design changes):
 - Two leftovers from the old FORM name: the favicon draws an "F" while the logo is an "R", and staff screens still say "FORM" in the scanner text and in export file names.
 - `public/connected.js`, which every page loads, still contains an unused "Connect Gmail" form with a "Google app password" field and a link to `myaccount.google.com`. It is overridden and never rendered.
 - At phone width the sign-in headline reads "chapterstarts here." because `public/connected.css:3` hides the line break.
+Update 2026-10-11 (Task 09 Part A): all four leftovers are fixed, and the old-host redirect no longer carries Vercel's `__path`/`path`.
+- The favicon is the RepReady "R" mark, and there is an apple-touch-icon.
+- The user-visible "FORM" strings are gone.
+- The unused Gmail form and its Google link are gone.
+- The phone headline has its space.
 
 ## FEATURE-002: Password rule and show-password toggle   (status: released)
 Requested: 2026-10-11 by Clark. Where: every screen that sets a password (Set your password from a setup or reset link, Change password, and the unused registration "Create password" field), plus the sign-in form, role: everyone.
