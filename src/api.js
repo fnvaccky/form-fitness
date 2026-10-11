@@ -18,7 +18,7 @@ const LINK_USED = 'This link expired or was already used — request a new one.'
 function confirmationPage(res, origin, status, title, detail) {
   res.statusCode=status;
   res.setHeader('Content-Type','text/html; charset=utf-8');
-  return res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow"><title>RepReady</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#143d32;color:#f4f6f5;font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:26rem;padding:2rem;text-align:center}h1{font-size:1.35rem;margin:0 0 .75rem}p{margin:0 0 1.5rem;opacity:.85}a{display:inline-block;padding:.7rem 1.4rem;border-radius:999px;background:#f4f6f5;color:#143d32;text-decoration:none;font-weight:600}</style></head><body><main><h1>${title}</h1><p>${detail}</p><a href="${origin}/">Return to RepReady</a></main></body></html>`);
+  return res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex, nofollow"><title>RepReady</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#143d32;color:#f4f6f5;font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:26rem;padding:2rem;text-align:center}h1{font-size:1.35rem;margin:0 0 .75rem}p{margin:0 0 1.5rem;opacity:.85}a{display:inline-block;padding:.7rem 1.4rem;border-radius:999px;background:#f4f6f5;color:#143d32;text-decoration:none;font-weight:600}</style></head><body><main><h1>${title}</h1><p>${detail}</p><a href="${origin}/">Return to RepReady</a></main></body></html>`);
 }
 async function readBody(req) {
   if (!req.headers['content-type']?.includes('application/json')) fail('Use a JSON request.',415);
@@ -86,7 +86,9 @@ export async function handle(req,res,env=process.env) {
       // domain first, so the session cookie is set there. The target is the fixed APP_ORIGIN, never a
       // value from the request.
       if((req.headers.host||'').toLowerCase()!==new URL(origin).host.toLowerCase()){
-        res.statusCode=302;res.setHeader('Location',origin+'/api/auth/callback'+url.search);return res.end();
+        // Only the original query: Vercel's rewrite adds __path and path, which mean nothing to the callback.
+        const query=new URLSearchParams(url.search);query.delete('__path');query.delete('path');
+        res.statusCode=302;res.setHeader('Location',origin+'/api/auth/callback'+(String(query)?'?'+query:''));return res.end();
       }
       const type=url.searchParams.get('type')||'', tokenHash=url.searchParams.get('token_hash')||'', code=url.searchParams.get('code')||'';
       // Supabase's default email templates return ?code= instead. That exchange needs the verifier cookie

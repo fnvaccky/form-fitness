@@ -843,6 +843,12 @@ test('a callback opened on another host is redirected to APP_ORIGIN before any v
     assert.equal(res.headers['set-cookie'],undefined,'no session cookie on the wrong host');
    }
   }
+  // Vercel's rewrite adds __path and path to the query; the redirect carries only the original query.
+  for(const path of ['/api/auth/callback?token_hash=abc123&type=recovery&__path=auth%2Fcallback&path=auth%2Fcallback','/api?__path=auth%2Fcallback&token_hash=abc123&type=recovery&path=auth%2Fcallback']){
+   const res=await get(path,'form-fitness-achillespasuncion-2666.vercel.app');
+   assert.equal(res.statusCode,302,path);
+   assert.equal(res.headers.location,appOrigin+'/api/auth/callback?token_hash=abc123&type=recovery',path);
+  }
   assert.equal(verified.length,0,'nothing is verified on the wrong host');
  }finally{server.close();supabase.close();}
 });
@@ -899,6 +905,33 @@ test('the set-password screen checks the link only when Save password is pressed
  assert.match(handler,/status===410/,'an expired link gets its own screen');
  assert.match(connected,/This link expired or was already used — request a new one/);
  assert.match(connected,/btn\('Forgot password','forgot-password'/,'with a button that opens Forgot password');
+});
+// Task 09 Part A: leftovers that made the app look inconsistent to people and to phishing checks.
+test('shipped pages carry no FORM branding and no Google app-password form',async()=>{
+ const {readFile,readdir}=await import('node:fs/promises');
+ const shipped=[...(await readdir('public')).filter(name=>/\.(js|html|css|svg)$/.test(name)).map(name=>'public/'+name),
+  ...(await readdir('supabase/templates')).map(name=>'supabase/templates/'+name)];
+ assert(shipped.includes('public/connected.js')&&shipped.includes('public/index.html'));
+ for(const file of shipped){
+  // FORM2. is the QR token prefix and FORM_QR a script global: data formats, never shown to anyone.
+  const text=await readFile(file,'utf8'),rest=text.replace(/FORM2\.|FORM_QR/g,''),leftover=rest.match(/\bFORM\b/g)||rest.match(/form[ -]?fitness/gi);
+  assert.equal(leftover,null,`${file} still says ${leftover}`);
+  for(const marker of ['gmail-password','gmail-settings-form','Google app password','myaccount.google.com','disconnect-email'])
+   assert(!text.includes(marker),`${file} still contains ${marker}`);
+ }
+ const connected=await readFile('public/connected.js','utf8');
+ const headline=connected.match(/<h1>(Your next chapter.*?)<\/h1>/)[1];
+ assert.equal(headline.replace(/<br>/g,'').replace(/\s+/g,' '),'Your next chapter starts here.','phones hide the line break, so the words need their own space');
+});
+test('the favicon is the RepReady R mark in the sidebar colours, with an apple-touch-icon',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const svg=await readFile('public/favicon.svg','utf8'),html=await readFile('public/index.html','utf8');
+ assert.match(svg,/fill="#183e33"/,'the sidebar mark background (--ink)');assert.match(svg,/fill="#dcf0c6"/,'the sidebar mark letter (--lime)');
+ assert(!svg.includes('M19 17h29v8H28v7h17v8H28v12h-9z'),'the old F is gone');
+ assert.match(html,/<link rel="icon" type="image\/svg\+xml" href="\/favicon\.svg">/);
+ assert.match(html,/<link rel="apple-touch-icon" href="\/apple-touch-icon\.png">/);
+ const png=await readFile('public/apple-touch-icon.png');
+ assert.equal(png.subarray(1,4).toString(),'PNG');assert.deepEqual([png.readUInt32BE(16),png.readUInt32BE(20)],[180,180],'180 × 180');
 });
 test('the setup email greets an account without a name properly',async()=>{
  const {readFile}=await import('node:fs/promises');
