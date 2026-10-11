@@ -20,7 +20,8 @@
     "test:paymongo": "node --env-file-if-exists=.env.local tests/paymongo.js",
     "test:staff": "node --env-file-if-exists=.env.local tests/staff.js",
     "test:emails": "node --env-file-if-exists=.env.local tests/email-uniqueness.js",
-    "test:links": "node --env-file-if-exists=.env.local tests/auth-links.js"
+    "test:links": "node --env-file-if-exists=.env.local tests/auth-links.js",
+    "test:passwords": "node --env-file-if-exists=.env.local tests/password-fields.js"
   },
   "engines": {
     "node": ">=22"

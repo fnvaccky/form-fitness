@@ -16,7 +16,7 @@ const pass=name=>{passed.push(name);console.log('PASS: '+name);};
 const email=`local-link-${randomUUID().slice(0,8)}@example.invalid`;
 const login=password=>fetch(origin+'/api/login',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({email,password})});
 try{
- const made=await db.auth.admin.createUser({email,password:randomBytes(24).toString('base64url'),email_confirm:true,
+ const made=await db.auth.admin.createUser({email,password:'Link9!'+randomBytes(24).toString('base64url'),email_confirm:true,
   app_metadata:{ff_workspace:'production',ff_role:'staff'},user_metadata:{form_fitness:true,name:'LOCAL TEST Link',phone:'09170000031'}});
  assert.equal(made.error,null);userId=made.data.user.id;
  const generated=await db.auth.admin.generateLink({type:'recovery',email});assert.equal(generated.error,null);
@@ -37,7 +37,7 @@ try{
  await page.goto(link);await page.getByRole('button',{name:'Save password',exact:true}).waitFor();
  assert.equal(page.url(),origin+'/#/set-password');
  assert(!(await page.content()).includes(tokenHash),'the token is never written into the page');
- const newPassword='LocalLink2026'+randomUUID().slice(0,6);
+ const newPassword='LocalLink2026!'+randomUUID().slice(0,6);
  await page.getByLabel('New password *',{exact:true}).fill(newPassword);
  const saving=page.waitForResponse(r=>r.url().endsWith('/api/auth/verify')&&r.request().method()==='POST');
  await page.getByRole('button',{name:'Save password',exact:true}).click();
@@ -49,7 +49,7 @@ try{
  pass('The person opens the link afterwards: no token in the address bar or page, and Save password verifies it and signs them in');
 
  const again=await browser.newContext(),reuse=await again.newPage();
- await reuse.goto(link);await reuse.getByLabel('New password *',{exact:true}).fill('LocalLinkReuse2026x');
+ await reuse.goto(link);await reuse.getByLabel('New password *',{exact:true}).fill('LocalLinkReuse2026!');
  const reusing=reuse.waitForResponse(r=>r.url().endsWith('/api/auth/verify')&&r.request().method()==='POST');
  await reuse.getByRole('button',{name:'Save password',exact:true}).click();
  assert.equal((await reusing).status(),410);
@@ -59,7 +59,7 @@ try{
  assert.equal(await reuse.getByLabel('Email address *',{exact:true}).isVisible(),true);
  pass('The used link shows "This link expired or was already used — request a new one", and its button opens Forgot password');
 
- assert.equal((await login(newPassword)).status,200);assert.equal((await login('LocalLinkReuse2026x')).status,401);
+ assert.equal((await login(newPassword)).status,200);assert.equal((await login('LocalLinkReuse2026!')).status,401);
  pass('The first saved password signs in; the second attempt changed nothing');
 }finally{
  await browser?.close();server.close();

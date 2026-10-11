@@ -13,6 +13,19 @@ test('required contacts and Philippine mobile normalization',()=>{
   for(const phone of ['12345','+14155555555','099999999999','0917123456'])assert.throws(()=>contacts({...valid,phone}));
   for(const email of ['x','x@x','a b@x.test','<a>@x.test'])assert.throws(()=>contacts({...valid,email}));
 });
+// FEATURE-002: one password rule for the server and the screens. It matches Supabase Auth's
+// "Lowercase, uppercase letters, digits and symbols" setting and its 72-character limit.
+test('the password rule: 8–72 characters with an uppercase letter, a lowercase letter, a number and a keyboard symbol',async()=>{
+  const rule=await import('../public/password-rule.js');
+  assert.equal(rule.PASSWORD_MESSAGE,'Use at least 8 characters with an uppercase letter, a lowercase letter, a number and a symbol.');
+  assert.deepEqual(rule.PASSWORD_CHECKS.map(check=>check.label),['8+ characters','Uppercase letter','Lowercase letter','Number','Symbol']);
+  for(const value of ['Abcdef1!','Password1?','P4ssw0rd/x','correct-Horse7','Aa1!'+'x'.repeat(68)])assert.equal(password(value),value,value);
+  for(const symbol of '!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~')assert.equal(password('Abcdefg1'+symbol),'Abcdefg1'+symbol,`${symbol} counts as a symbol`);
+  for(const [value,why] of [['abcdef1!','no uppercase letter'],['ABCDEF1!','no lowercase letter'],['Abcdefg!','no number'],['Abcdefg1','no symbol'],
+    ['Abcde1!','7 characters'],['Aa1!'+'x'.repeat(69),'73 characters'],['Aa1!'+'x'.repeat(125),'129 characters'],['Aa1!'+'é'.repeat(35),'39 characters but 74 bytes'],
+    ['Abcdefg1 ','a space is not a symbol'],['Abcdefg1₱','₱ is not a keyboard symbol'],['Ébcdefg1!','É is not A–Z'],['','empty'],[null,'missing'],[12345678,'not text']])
+    assert.throws(()=>password(value),{message:rule.PASSWORD_MESSAGE},why);
+});
 test('password and exact calendar dates',()=>{
   assert.equal(password('StrongPassword2026!'),'StrongPassword2026!');
   for(const value of ['short','abcdefghijkl','123456789012',null])assert.throws(()=>password(value));
@@ -232,20 +245,20 @@ test('a scanned setup link still works: Save password verifies it and sets the p
   try{
     for(let visit=0;visit<3;visit++)assert.equal((await fetch(`${s.origin}/api/auth/callback?token_hash=one-time&type=recovery`,{redirect:'manual'})).status,303);
     assert.equal(s.state.requests.length,0,'opening the link checks nothing');
-    const saved=await s.save({type:'recovery',tokenHash:'one-time',newPassword:'StrongPassword2026'});
+    const saved=await s.save({type:'recovery',tokenHash:'one-time',newPassword:'StrongPassword2026!'});
     assert.equal(saved.status,200,(await saved.clone().json()).error);
     assert.deepEqual(await saved.json(),{ok:true});
-    assert.equal(s.state.password,'StrongPassword2026');
+    assert.equal(s.state.password,'StrongPassword2026!');
     assert(sessionCookies(saved).length&&sessionCookies(saved).every(value=>/HttpOnly/i.test(value)),'signed in with an HttpOnly session');
     assert.deepEqual(verifyCalls(s.state).map(({body})=>({type:body.type,token_hash:body.token_hash,code_verifier:body.code_verifier})),[{type:'recovery',token_hash:'one-time',code_verifier:undefined}],'verified once, with no PKCE verifier');
     const order=s.state.requests.map(r=>r.path==='/auth/v1/verify'?'verify':r.method==='PUT'?'set-password':r.path==='/auth/v1/logout'?'logout-'+r.scope:'').filter(Boolean);
     assert.deepEqual(order,['verify','set-password','logout-others'],'verify first, then the password, then other sessions end');
     // The same link again fails cleanly.
-    const again=await s.save({type:'recovery',tokenHash:'one-time',newPassword:'AnotherPassword2026'});
+    const again=await s.save({type:'recovery',tokenHash:'one-time',newPassword:'AnotherPassword2026!'});
     assert.equal(again.status,410);
     assert.deepEqual(await again.json(),{error:'This link expired or was already used — request a new one.'});
     assert.equal(sessionCookies(again).length,0,'no session');
-    assert.equal(s.state.password,'StrongPassword2026','the second attempt changes nothing');
+    assert.equal(s.state.password,'StrongPassword2026!','the second attempt changes nothing');
     assert.equal(s.state.requests.filter(r=>r.method==='PUT').length,1);
   }finally{s.close();}
 });
@@ -253,7 +266,7 @@ test('a scanned setup link still works: Save password verifies it and sets the p
 test('Save password refuses a bad request before the link is checked, so the link stays usable',async()=>{
   const s=await setupLinkServer();
   try{
-    const good={type:'recovery',tokenHash:'one-time',newPassword:'StrongPassword2026'};
+    const good={type:'recovery',tokenHash:'one-time',newPassword:'StrongPassword2026!'};
     for(const [body,status] of [[{...good,newPassword:'short'},400],[{...good,newPassword:'abcdefghijklmn'},400],[{type:'recovery',tokenHash:'one-time'},400],
       [{...good,type:'email_change'},400],[{...good,type:'bogus'},400],[{...good,tokenHash:''},400],[{...good,tokenHash:42},400]]){
       const response=await s.save(body);
@@ -268,15 +281,15 @@ test('Save password refuses a bad request before the link is checked, so the lin
 test('if the link worked but the password is refused, the person is signed in and can save again',async()=>{
   const s=await setupLinkServer({rejectPassword:true});
   try{
-    const refused=await s.save({type:'recovery',tokenHash:'one-time',newPassword:'StrongPassword2026'});
+    const refused=await s.save({type:'recovery',tokenHash:'one-time',newPassword:'StrongPassword2026!'});
     assert.equal(refused.status,422);
     assert.match((await refused.json()).error,/link worked, but this password couldn.t be saved/);
     const cookie=sessionCookies(refused).map(value=>value.split(';')[0]).join('; ');
     assert(cookie,'the verified session is kept for the retry');
     s.state.rejectPassword=false;
-    const retry=await fetch(s.origin+'/api/set-password',{method:'POST',headers:{Origin:s.origin,'Content-Type':'application/json',Cookie:cookie},body:JSON.stringify({newPassword:'DifferentPassword2026'})});
+    const retry=await fetch(s.origin+'/api/set-password',{method:'POST',headers:{Origin:s.origin,'Content-Type':'application/json',Cookie:cookie},body:JSON.stringify({newPassword:'DifferentPassword2026!'})});
     assert.equal(retry.status,200,(await retry.clone().json()).error);
-    assert.equal(s.state.password,'DifferentPassword2026');
+    assert.equal(s.state.password,'DifferentPassword2026!');
     assert.equal(verifyCalls(s.state).length,1,'the retry does not need the link again');
   }finally{s.close();}
 });
@@ -285,12 +298,35 @@ test('Save password reports a busy or unreachable Auth server as retryable, not 
   for(const [verifyStatus,status] of [[429,429],[500,503],[502,503]]){
     const s=await setupLinkServer({verifyStatus});
     try{
-      const response=await s.save({type:'recovery',tokenHash:'one-time',newPassword:'StrongPassword2026'});
+      const response=await s.save({type:'recovery',tokenHash:'one-time',newPassword:'StrongPassword2026!'});
       assert.equal(response.status,status,String(verifyStatus));
       assert.doesNotMatch((await response.json()).error,/expired/);
       assert.equal(s.state.password,null);
     }finally{s.close();}
   }
+});
+
+// FEATURE-002: the browser checks the rule too, but a request that skips the page gets the same answer.
+test('the API refuses a weak password even when the browser check is bypassed',async()=>{
+  const {PASSWORD_MESSAGE}=await import('../public/password-rule.js');
+  const session=await consoleSession('member');
+  try{
+    for(const [path,body] of [['/set-password',{newPassword:'abcdefgh1234'}],['/set-password',{newPassword:'Abcdefg1'}],['/password',{currentPassword:'fake-password',newPassword:'abcdefgh1234'}]]){
+      const before=session.state.requests.length;
+      const response=await session.post(path,body);
+      assert.equal(response.status,400,`${path} ${body.newPassword}`);
+      assert.deepEqual(await response.json(),{error:PASSWORD_MESSAGE});
+      assert(!session.state.requests.slice(before).some(r=>r.path.startsWith('/auth/v1/')&&r.method!=='GET'),'Supabase Auth is never asked to change it');
+    }
+    const enough=await session.post('/set-password',{newPassword:'Abcdef1!'});
+    assert.equal(enough.status,200,'8 characters with every kind is enough');
+  }finally{session.close();}
+  const link=await setupLinkServer();
+  try{
+    const weak=await link.save({type:'recovery',tokenHash:'one-time',newPassword:'abcdefgh1234'});
+    assert.equal(weak.status,400);assert.deepEqual(await weak.json(),{error:PASSWORD_MESSAGE});
+    assert.equal(link.state.requests.length,0,'the setup link is not used up');
+  }finally{link.close();}
 });
 
 test('a ?code= reset link opened in the requesting browser signs in through the PKCE exchange',async()=>{
@@ -380,6 +416,7 @@ function fakeSupabase(state){
     res.setHeader('Content-Type','application/json');
     if(url.pathname==='/auth/v1/token')return res.end(JSON.stringify(state.session));
     if(url.pathname==='/auth/v1/user')return res.end(JSON.stringify(state.session.user));
+    if(url.pathname==='/auth/v1/logout'){res.statusCode=204;return res.end();}
     if(url.pathname==='/rest/v1/ff_profiles')return res.end(JSON.stringify([state.profile]));
     if(url.pathname==='/rest/v1/ff_plans')return res.end(JSON.stringify([{id:'basic',name:'Essential',days:30,features:['All strength equipment']}]));
     if(url.pathname==='/auth/v1/invite')return res.end(JSON.stringify({action_link:'https://example.invalid/link',email_otp:'',hashed_token:'fake-hash',redirect_to:'',verification_type:'invite',id:'99999999-0000-0000-0000-000000000000',email:'new-member@example.invalid',aud:'authenticated',app_metadata:{},user_metadata:{},created_at:new Date().toISOString()}));

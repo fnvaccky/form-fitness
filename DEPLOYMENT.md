@@ -31,7 +31,11 @@ The deployment script requires demo mode, installs encrypted preview variables, 
 
 The three checked-in migrations have already been applied. Do not reset the database or replay applied migrations blindly. For a future change, run `supabase login`, `supabase link --project-ref ivxbrhqqfgmhfpgpauzh`, review `supabase db push --dry-run`, then apply only pending reviewed migrations. The `ff_` tables and private functions belong to this application; unrelated tables must remain untouched.
 
-Auth URL configuration has been applied and verified, and Supabase now enforces a 12-character minimum password. For future changes, in Supabase Authentication > URL Configuration, set the Site URL to the exact protected deployment used for real accounts. Add one exact callback URL per environment (avoid wildcard domains):
+Auth URL configuration has been applied and verified.
+
+**Password rule (FEATURE-002):** every new password needs 8–72 characters, with an uppercase letter (A–Z), a lowercase letter (a–z), a number and a keyboard symbol (`! " # $ % & ' ( ) * + , - . / : ; < = > ? @ [ \ ] ^ _ ` { | } ~`). The rule is defined once in `public/password-rule.js`. The server enforces it in `src/validation.js`, and the set and change password screens show it as a checklist. It matches Supabase Auth, which refuses anything over 72 characters, so set the hosted project to the same rule: in Supabase Authentication, set the minimum password length to **8** and the password requirements to **Lowercase, uppercase letters, digits and symbols**. Locally, `supabase/config.toml` has `minimum_password_length = 8` and `password_requirements = "lower_upper_letters_digits_symbols"`; restart with `supabase stop` / `supabase start` after changing it.
+
+For future changes, in Supabase Authentication > URL Configuration, set the Site URL to the exact protected deployment used for real accounts. Add one exact callback URL per environment (avoid wildcard domains):
 
 - `http://localhost:4173/api/auth/callback`
 - `https://<preview-or-production-host>/api/auth/callback`

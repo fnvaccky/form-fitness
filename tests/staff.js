@@ -51,7 +51,7 @@ try{
  const link=mail.HTML.match(/href="([^"]*token_hash=[^"]+)"/)[1].replaceAll('&amp;','&');assert(link.startsWith(origin+'/api/auth/callback?'));
  browser=await chromium.launch({channel:'msedge',headless:true});
  const page=await browser.newPage();await page.goto(link);
- const newStaff={email,password:'LocalStaff2026'+randomUUID().slice(0,6)};
+ const newStaff={email,password:'LocalStaff2026!'+randomUUID().slice(0,6)};
  const saving=page.waitForResponse(r=>r.url().endsWith('/api/auth/verify')&&r.request().method()==='POST');
  await page.getByLabel('New password *',{exact:true}).fill(newStaff.password);await page.getByRole('button',{name:'Save password',exact:true}).click();
  const saved=await saving;assert.equal(saved.status(),200,(await saved.json()).error);

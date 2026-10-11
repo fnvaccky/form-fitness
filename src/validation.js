@@ -1,3 +1,4 @@
+import { PASSWORD_MESSAGE, passwordMeetsRule } from '../public/password-rule.js';
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
@@ -20,8 +21,9 @@ export function contacts(body) {
   if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(email) || email.length > 100) fail('Enter a valid email address.');
   return { name, email, phone: mobile(body.phone) };
 }
+// The rule lives in public/password-rule.js so the screens show exactly what the server enforces.
 export function password(value) {
-  if (typeof value !== 'string' || value.length < 12 || value.length > 128 || !/[a-z]/i.test(value) || !/\d/.test(value)) fail('Use 12–128 characters with a letter and a number.');
+  if (!passwordMeetsRule(value)) fail(PASSWORD_MESSAGE);
   return value;
 }
 export function startDate(value, current = today()) {
