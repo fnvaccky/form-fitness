@@ -19,7 +19,8 @@
     "test:registration": "node --env-file-if-exists=.env.local tests/registration-resilience.js",
     "test:paymongo": "node --env-file-if-exists=.env.local tests/paymongo.js",
     "test:staff": "node --env-file-if-exists=.env.local tests/staff.js",
-    "test:emails": "node --env-file-if-exists=.env.local tests/email-uniqueness.js"
+    "test:emails": "node --env-file-if-exists=.env.local tests/email-uniqueness.js",
+    "test:links": "node --env-file-if-exists=.env.local tests/auth-links.js"
   },
   "engines": {
     "node": ">=22"

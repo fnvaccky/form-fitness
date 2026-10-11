@@ -52,7 +52,7 @@ try{
  browser=await chromium.launch({channel:'msedge',headless:true});
  const page=await browser.newPage();await page.goto(link);
  const newStaff={email,password:'LocalStaff2026'+randomUUID().slice(0,6)};
- const saving=page.waitForResponse(r=>r.url().endsWith('/api/set-password')&&r.request().method()==='POST');
+ const saving=page.waitForResponse(r=>r.url().endsWith('/api/auth/verify')&&r.request().method()==='POST');
  await page.getByLabel('New password *',{exact:true}).fill(newStaff.password);await page.getByRole('button',{name:'Save password',exact:true}).click();
  const saved=await saving;assert.equal(saved.status(),200,(await saved.json()).error);
  const session=await (await page.request.get(origin+'/api/session')).json();

@@ -162,37 +162,135 @@ test('email confirmation callback rejects malformed links with an HTML page, nev
   }finally{server.close();}
 });
 
-test('email confirmation callback verifies token_hash without PKCE and routes by type',async()=>{
+// BUG-011: link scanners (Google Safe Browsing, Gmail, Brave) open email links before people do.
+test('the callback never verifies on GET: every token link moves to the set-password screen with the token in the fragment',async()=>{
   const requests=[];
-  const encode=value=>Buffer.from(JSON.stringify(value)).toString('base64url');
-  const userId='11111111-2222-3333-4444-555555555555';
-  const expires=Math.floor(Date.now()/1000)+3600;
-  const accessToken=`${encode({alg:'HS256',typ:'JWT'})}.${encode({sub:userId,aud:'authenticated',exp:expires,session_id:'66666666-7777-8888-9999-000000000000'})}.test-signature`;
-  const supabase=http.createServer(async(req,res)=>{
-    let raw='';for await(const chunk of req)raw+=chunk;
-    requests.push({url:req.url,body:raw?JSON.parse(raw):null});
-    res.setHeader('Content-Type','application/json');
-    res.end(JSON.stringify({access_token:accessToken,token_type:'bearer',expires_in:3600,expires_at:expires,refresh_token:'fake-refresh-token',
-      user:{id:userId,aud:'authenticated',role:'authenticated',email:'confirm@example.invalid',app_metadata:{},user_metadata:{},created_at:new Date().toISOString()}}));
-  });
+  const supabase=http.createServer(async(req,res)=>{for await(const chunk of req);requests.push(req.url);res.statusCode=500;res.end('{}');});
   await new Promise(resolve=>supabase.listen(0,'127.0.0.1',resolve));
   let origin='';
   const server=http.createServer((req,res)=>handle(req,res,{SUPABASE_URL:`http://127.0.0.1:${supabase.address().port}`,SUPABASE_PUBLISHABLE_KEY:'publishable-placeholder',APP_ORIGIN:origin}));
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   origin=`http://127.0.0.1:${server.address().port}`;
   try{
-    for(const [type,destination] of [['signup','/'],['email','/'],['recovery','/#/set-password'],['invite','/#/set-password']]){
-      const response=await fetch(`${origin}/api/auth/callback?token_hash=hash-${type}&type=${type}`,{redirect:'manual'});
-      assert.equal(response.status,303,type);
-      assert.equal(response.headers.get('location'),origin+destination,type);
-      assert(response.headers.getSetCookie().some(cookie=>/HttpOnly/i.test(cookie)),`${type} must set an HttpOnly session cookie`);
-      const sent=requests.at(-1);
-      assert.match(sent.url,/\/auth\/v1\/verify/,type);
-      assert.equal(sent.body.token_hash,`hash-${type}`,type);
-      assert.equal(sent.body.type,type);
-      assert.equal(sent.body.code_verifier,undefined,'token_hash verification must not depend on a PKCE verifier');
+    for(const type of ['recovery','invite','signup','email']){
+      // Scanners first, then the person: every visit gets the same redirect and nothing is used up.
+      for(let visit=0;visit<3;visit++){
+        const response=await fetch(`${origin}/api/auth/callback?token_hash=hash-${type}&type=${type}`,{redirect:'manual'});
+        assert.equal(response.status,303,type);
+        assert.equal(response.headers.get('location'),`${origin}/#/set-password?token_hash=hash-${type}&type=${type}`,type);
+        assert.equal(response.headers.getSetCookie().length,0,'a visit never signs anyone in');
+        assert.equal(response.headers.get('cache-control'),'private, no-store');
+        assert.equal(response.headers.get('referrer-policy'),'no-referrer');
+        assert.equal(await response.text(),'','the token is never echoed into a page');
+      }
     }
+    assert.deepEqual(requests,[],'a GET never reaches Supabase Auth');
   }finally{server.close();supabase.close();}
+});
+
+// A fake GoTrue whose token_hash links work exactly once, like the real one.
+async function setupLinkServer({verifyStatus=0,rejectPassword=false}={}){
+  const encode=value=>Buffer.from(JSON.stringify(value)).toString('base64url');
+  const userId='33333333-4444-5555-6666-777777777777',expires=Math.floor(Date.now()/1000)+3600;
+  const user={id:userId,aud:'authenticated',role:'authenticated',email:'new-staff@example.invalid',app_metadata:{},user_metadata:{},created_at:new Date().toISOString()};
+  const state={requests:[],unused:new Set(['one-time']),password:null,rejectPassword,
+    session:{access_token:`${encode({alg:'HS256',typ:'JWT'})}.${encode({sub:userId,aud:'authenticated',exp:expires,session_id:'88888888-9999-0000-1111-222222222222'})}.test-signature`,
+      token_type:'bearer',expires_in:3600,expires_at:expires,refresh_token:'fake-refresh-token',user},
+    profile:{id:userId,workspace:'production',role:'staff',name:'New Staff',email:user.email,phone:'09170000009',enabled:true,goal:'',photo:'',created_at:new Date().toISOString()}};
+  const supabase=http.createServer(async(req,res)=>{
+    let raw='';for await(const chunk of req)raw+=chunk;
+    const url=new URL(req.url,'http://localhost'),body=raw?JSON.parse(raw):null;
+    state.requests.push({method:req.method,path:url.pathname,scope:url.searchParams.get('scope'),body});
+    res.setHeader('Content-Type','application/json');
+    if(url.pathname==='/auth/v1/verify'){
+      if(verifyStatus){res.statusCode=verifyStatus;return res.end(JSON.stringify({code:verifyStatus,msg:'unavailable'}));}
+      if(state.unused.delete(body.token_hash))return res.end(JSON.stringify(state.session));
+      res.statusCode=403;return res.end(JSON.stringify({code:403,error_code:'otp_expired',msg:'Email link is invalid or has expired'}));
+    }
+    if(url.pathname==='/auth/v1/user'&&req.method==='PUT'){
+      if(state.rejectPassword){res.statusCode=422;return res.end(JSON.stringify({code:422,error_code:'same_password',msg:'New password should be different from the old password.'}));}
+      state.password=body.password;return res.end(JSON.stringify(user));
+    }
+    if(url.pathname==='/auth/v1/user')return res.end(JSON.stringify(user));
+    if(url.pathname==='/auth/v1/logout'){res.statusCode=204;return res.end();}
+    if(url.pathname==='/rest/v1/ff_profiles')return res.end(JSON.stringify([state.profile]));
+    res.statusCode=404;return res.end('{}');
+  });
+  await new Promise(resolve=>supabase.listen(0,'127.0.0.1',resolve));
+  let origin='';
+  const api=http.createServer((req,res)=>handle(req,res,{SUPABASE_URL:`http://127.0.0.1:${supabase.address().port}`,SUPABASE_PUBLISHABLE_KEY:'publishable',APP_ORIGIN:origin,APP_WORKSPACE:'production'}));
+  await new Promise(resolve=>api.listen(0,'127.0.0.1',resolve));
+  origin=`http://127.0.0.1:${api.address().port}`;
+  const save=(body,{from=origin,cookie=''}={})=>fetch(origin+'/api/auth/verify',{method:'POST',headers:{Origin:from,'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},body:JSON.stringify(body)});
+  return {origin,state,save,close(){api.close();supabase.close();}};
+}
+const sessionCookies=response=>response.headers.getSetCookie().filter(value=>/-auth-token(\.\d+)?=[^;]/.test(value.split(';')[0]));
+const verifyCalls=state=>state.requests.filter(r=>r.path==='/auth/v1/verify');
+
+test('a scanned setup link still works: Save password verifies it and sets the password in one POST, once',async()=>{
+  const s=await setupLinkServer();
+  try{
+    for(let visit=0;visit<3;visit++)assert.equal((await fetch(`${s.origin}/api/auth/callback?token_hash=one-time&type=recovery`,{redirect:'manual'})).status,303);
+    assert.equal(s.state.requests.length,0,'opening the link checks nothing');
+    const saved=await s.save({type:'recovery',tokenHash:'one-time',newPassword:'StrongPassword2026'});
+    assert.equal(saved.status,200,(await saved.clone().json()).error);
+    assert.deepEqual(await saved.json(),{ok:true});
+    assert.equal(s.state.password,'StrongPassword2026');
+    assert(sessionCookies(saved).length&&sessionCookies(saved).every(value=>/HttpOnly/i.test(value)),'signed in with an HttpOnly session');
+    assert.deepEqual(verifyCalls(s.state).map(({body})=>({type:body.type,token_hash:body.token_hash,code_verifier:body.code_verifier})),[{type:'recovery',token_hash:'one-time',code_verifier:undefined}],'verified once, with no PKCE verifier');
+    const order=s.state.requests.map(r=>r.path==='/auth/v1/verify'?'verify':r.method==='PUT'?'set-password':r.path==='/auth/v1/logout'?'logout-'+r.scope:'').filter(Boolean);
+    assert.deepEqual(order,['verify','set-password','logout-others'],'verify first, then the password, then other sessions end');
+    // The same link again fails cleanly.
+    const again=await s.save({type:'recovery',tokenHash:'one-time',newPassword:'AnotherPassword2026'});
+    assert.equal(again.status,410);
+    assert.deepEqual(await again.json(),{error:'This link expired or was already used — request a new one.'});
+    assert.equal(sessionCookies(again).length,0,'no session');
+    assert.equal(s.state.password,'StrongPassword2026','the second attempt changes nothing');
+    assert.equal(s.state.requests.filter(r=>r.method==='PUT').length,1);
+  }finally{s.close();}
+});
+
+test('Save password refuses a bad request before the link is checked, so the link stays usable',async()=>{
+  const s=await setupLinkServer();
+  try{
+    const good={type:'recovery',tokenHash:'one-time',newPassword:'StrongPassword2026'};
+    for(const [body,status] of [[{...good,newPassword:'short'},400],[{...good,newPassword:'abcdefghijklmn'},400],[{type:'recovery',tokenHash:'one-time'},400],
+      [{...good,type:'email_change'},400],[{...good,type:'bogus'},400],[{...good,tokenHash:''},400],[{...good,tokenHash:42},400]]){
+      const response=await s.save(body);
+      assert.equal(response.status,status,JSON.stringify(body));
+    }
+    assert.equal((await s.save(good,{from:'https://evil.example'})).status,403,'another site cannot submit it');
+    assert.equal(s.state.requests.length,0,'none of these reached Supabase Auth');
+    assert.equal((await s.save(good)).status,200,'the link still works afterwards');
+  }finally{s.close();}
+});
+
+test('if the link worked but the password is refused, the person is signed in and can save again',async()=>{
+  const s=await setupLinkServer({rejectPassword:true});
+  try{
+    const refused=await s.save({type:'recovery',tokenHash:'one-time',newPassword:'StrongPassword2026'});
+    assert.equal(refused.status,422);
+    assert.match((await refused.json()).error,/link worked, but this password couldn.t be saved/);
+    const cookie=sessionCookies(refused).map(value=>value.split(';')[0]).join('; ');
+    assert(cookie,'the verified session is kept for the retry');
+    s.state.rejectPassword=false;
+    const retry=await fetch(s.origin+'/api/set-password',{method:'POST',headers:{Origin:s.origin,'Content-Type':'application/json',Cookie:cookie},body:JSON.stringify({newPassword:'DifferentPassword2026'})});
+    assert.equal(retry.status,200,(await retry.clone().json()).error);
+    assert.equal(s.state.password,'DifferentPassword2026');
+    assert.equal(verifyCalls(s.state).length,1,'the retry does not need the link again');
+  }finally{s.close();}
+});
+
+test('Save password reports a busy or unreachable Auth server as retryable, not as an expired link',async()=>{
+  for(const [verifyStatus,status] of [[429,429],[500,503],[502,503]]){
+    const s=await setupLinkServer({verifyStatus});
+    try{
+      const response=await s.save({type:'recovery',tokenHash:'one-time',newPassword:'StrongPassword2026'});
+      assert.equal(response.status,status,String(verifyStatus));
+      assert.doesNotMatch((await response.json()).error,/expired/);
+      assert.equal(s.state.password,null);
+    }finally{s.close();}
+  }
 });
 
 test('a ?code= reset link opened in the requesting browser signs in through the PKCE exchange',async()=>{
@@ -280,7 +378,7 @@ function fakeSupabase(state){
     const url=new URL(req.url,'http://localhost');
     state.requests.push({method:req.method,path:url.pathname,body:raw?JSON.parse(raw):null});
     res.setHeader('Content-Type','application/json');
-    if(url.pathname==='/auth/v1/verify')return res.end(JSON.stringify(state.session));
+    if(url.pathname==='/auth/v1/token')return res.end(JSON.stringify(state.session));
     if(url.pathname==='/auth/v1/user')return res.end(JSON.stringify(state.session.user));
     if(url.pathname==='/rest/v1/ff_profiles')return res.end(JSON.stringify([state.profile]));
     if(url.pathname==='/rest/v1/ff_plans')return res.end(JSON.stringify([{id:'basic',name:'Essential',days:30,features:['All strength equipment']}]));
@@ -304,7 +402,8 @@ async function consoleSession(role){
   const api=http.createServer((req,res)=>handle(req,res,{SUPABASE_URL:`http://127.0.0.1:${supabase.address().port}`,SUPABASE_PUBLISHABLE_KEY:'publishable',SUPABASE_SECRET_KEY:'secret',APP_ORIGIN:origin,APP_WORKSPACE:'production'}));
   await new Promise(resolve=>api.listen(0,'127.0.0.1',resolve));
   origin=`http://127.0.0.1:${api.address().port}`;
-  const landing=await fetch(`${origin}/api/auth/callback?token_hash=seed&type=signup`,{redirect:'manual'});
+  const landing=await fetch(`${origin}/api/login`,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({email:user.email,password:'fake-password'})});
+  assert.equal(landing.status,200,'the fake session signs in');
   const cookie=landing.headers.getSetCookie().map(value=>value.split(';')[0]).join('; ');
   return {origin,state,
     post:(path,body)=>fetch(origin+'/api'+path,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookie},body:JSON.stringify(body||{})}),
@@ -710,13 +809,9 @@ test('a callback opened on another host is redirected to APP_ORIGIN before any v
   assert.equal(verified.length,0,'nothing is verified on the wrong host');
  }finally{server.close();supabase.close();}
 });
-test('a callback on the APP_ORIGIN host still verifies as before',async()=>{
- const encode=value=>Buffer.from(JSON.stringify(value)).toString('base64url');
- const expires=Math.floor(Date.now()/1000)+3600,userId='11111111-2222-3333-4444-555555555555';
- const accessToken=`${encode({alg:'HS256',typ:'JWT'})}.${encode({sub:userId,aud:'authenticated',exp:expires,session_id:'66666666-7777-8888-9999-000000000000'})}.test-signature`;
+test('a callback on the APP_ORIGIN host moves to the set-password screen without verifying',async()=>{
  const verified=[];
- const supabase=http.createServer(async(req,res)=>{let raw='';for await(const chunk of req)raw+=chunk;verified.push(JSON.parse(raw||'{}'));res.setHeader('Content-Type','application/json');
-  res.end(JSON.stringify({access_token:accessToken,token_type:'bearer',expires_in:3600,expires_at:expires,refresh_token:'fake-refresh-token',user:{id:userId,aud:'authenticated',role:'authenticated',email:'right-host@example.invalid',app_metadata:{},user_metadata:{},created_at:new Date().toISOString()}}));});
+ const supabase=http.createServer(async(req,res)=>{for await(const chunk of req);verified.push(req.url);res.statusCode=500;res.end('{}');});
  await new Promise(resolve=>supabase.listen(0,'127.0.0.1',resolve));
  let appOrigin='';
  const server=http.createServer((req,res)=>handle(req,res,{SUPABASE_URL:`http://127.0.0.1:${supabase.address().port}`,SUPABASE_PUBLISHABLE_KEY:'publishable-placeholder',APP_ORIGIN:appOrigin}));
@@ -724,10 +819,49 @@ test('a callback on the APP_ORIGIN host still verifies as before',async()=>{
  appOrigin=`http://repready.test:${server.address().port}`;
  try{
   const res=await new Promise((resolve,reject)=>http.get({host:'127.0.0.1',port:server.address().port,path:'/api/auth/callback?token_hash=right-host&type=recovery',headers:{host:new URL(appOrigin).host}},r=>{r.resume();resolve(r);}).on('error',reject));
-  assert.equal(res.statusCode,303);assert.equal(res.headers.location,appOrigin+'/#/set-password');
-  assert((res.headers['set-cookie']||[]).some(cookie=>/HttpOnly/i.test(cookie)),'session cookie set on the real host');
-  assert.equal(verified.at(-1).token_hash,'right-host');
+  assert.equal(res.statusCode,303);assert.equal(res.headers.location,appOrigin+'/#/set-password?token_hash=right-host&type=recovery');
+  assert.equal(res.headers['set-cookie'],undefined,'no session from a visit');
+  assert.equal(verified.length,0,'nothing is verified');
  }finally{server.close();supabase.close();}
+});
+// Runs public/auth-link.js the way the page does: first, before any other script.
+async function authLinkRun(pathname,search,hash){
+ const {readFile}=await import('node:fs/promises');const vm=await import('node:vm');
+ const calls={replace:[],replaceState:[]};
+ const ctx={URLSearchParams,location:{pathname,search,hash,replace:url=>calls.replace.push(url)},history:{replaceState:(state,title,url)=>calls.replaceState.push(url)}};
+ vm.createContext(ctx);vm.runInContext(await readFile('public/auth-link.js','utf8'),ctx);
+ return {forwarded:vm.runInContext('authLinkForwarded',ctx),setupLink:JSON.parse(JSON.stringify(vm.runInContext('setupLink',ctx))),calls};
+}
+test('the set-password token is read from the fragment once, kept in memory and removed from the address bar',async()=>{
+ for(const type of ['recovery','invite','signup','email']){
+  const r=await authLinkRun('/','',`#/set-password?token_hash=abc123&type=${type}`);
+  assert.equal(r.forwarded,false);
+  assert.deepEqual(r.setupLink,{tokenHash:'abc123',type},type);
+  assert.deepEqual(r.calls.replaceState,['/#/set-password'],'the token leaves the current history entry');
+  assert.equal(r.calls.replace.length,0,'no navigation, so no request ever carries the token');
+ }
+ for(const hash of ['#/set-password?token_hash=abc123&type=bogus','#/set-password?type=recovery','#/set-password?token_hash=abc123']){
+  const r=await authLinkRun('/','',hash);
+  assert.equal(r.setupLink,null,hash);assert.deepEqual(r.calls.replaceState,['/#/set-password'],'stripped even when unusable');
+ }
+ for(const hash of ['','#/set-password','#/admin/members','#/member/overview?token_hash=abc123&type=recovery']){
+  const r=await authLinkRun('/','',hash);
+  assert.equal(r.setupLink,null,hash);assert.equal(r.calls.replaceState.length,0,`${hash} is left alone`);
+ }
+ const forwarded=await authLinkRun('/','?token_hash=abc123&type=recovery','#/set-password?token_hash=other&type=recovery');
+ assert.equal(forwarded.forwarded,true);assert.equal(forwarded.setupLink,null,'a forwarded page reads nothing');
+});
+test('the set-password screen checks the link only when Save password is pressed',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const connected=await readFile('public/connected.js','utf8');
+ const setup=connected.slice(connected.indexOf('async function passwordSetup(){'),connected.indexOf('selectPlan=function'));
+ assert(setup.length>0&&!setup.includes("api('/auth/verify'"),'opening the screen calls no API with the token');
+ assert(!/location\.hash/.test(setup),'the screen uses the token captured by auth-link.js, not the address bar');
+ const handler=connected.slice(connected.indexOf("'setup-password-form':"),connected.indexOf("'renew-form':"));
+ assert.match(handler,/api\('\/auth\/verify',\{\.\.\.link,newPassword\}\)/,'Save password sends the token with the new password in one POST');
+ assert.match(handler,/status===410/,'an expired link gets its own screen');
+ assert.match(connected,/This link expired or was already used — request a new one/);
+ assert.match(connected,/btn\('Forgot password','forgot-password'/,'with a button that opens Forgot password');
 });
 test('the setup email greets an account without a name properly',async()=>{
  const {readFile}=await import('node:fs/promises');

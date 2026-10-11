@@ -8,9 +8,10 @@ import {createStaff,updateStaff,setStaffEnabled,resendStaffSetup} from './staff.
 import { flushEmails } from './notifications.js';
 
 function send(res, status, data) { res.statusCode=status; res.end(JSON.stringify(data)); }
-// Supabase Auth email types this application accepts, mapped to where the member lands
-// afterwards. Signup confirmations already have a password; recovery and invites do not.
-const CONFIRMATION_TYPES = { signup:'/', email:'/', recovery:'/#/set-password', invite:'/#/set-password' };
+// Supabase Auth email link types this application accepts. Every link lands on the set-password screen.
+const LINK_TYPES = ['signup','email','recovery','invite'];
+const SET_PASSWORD = '/#/set-password';
+const LINK_USED = 'This link expired or was already used — request a new one.';
 // Confirmation links are opened by top-level browser navigation, so a JSON body would be
 // shown to the member as raw text. Every interpolated value below is a fixed string or the
 // validated origin; the token is never echoed back into the page.
@@ -78,10 +79,9 @@ export async function handle(req,res,env=process.env) {
       return send(res,200,{ok:true,message:'If the account exists, check your email for a password setup link.'});
     }
     if (path==='/auth/callback' && req.method==='GET') {
-      // Verified against @supabase/supabase-js 2.116.0: verifyOtp posts token_hash straight to
-      // GoTrue /verify and saves the session through the cookie adapter. Unlike the PKCE code
-      // exchange it needs no code verifier, so the link still works when the member opens their
-      // email on a different device than the one they registered on.
+      // Link scanners (Google Safe Browsing, Gmail, Brave) open email links before people do, so a GET
+      // never uses the token (BUG-011). It only moves the token into the fragment of the set-password
+      // screen, which browsers never send to a server or put in a referrer. Save password checks it.
       // A link that lands on another host (for example Supabase's Site URL fallback) moves to the real
       // domain first, so the session cookie is set there. The target is the fixed APP_ORIGIN, never a
       // value from the request.
@@ -90,25 +90,28 @@ export async function handle(req,res,env=process.env) {
       }
       const type=url.searchParams.get('type')||'', tokenHash=url.searchParams.get('token_hash')||'', code=url.searchParams.get('code')||'';
       // Supabase's default email templates return ?code= instead. That exchange needs the verifier cookie
-      // stored when the email was requested, so it only succeeds in the same browser.
+      // stored when the email was requested, so it only succeeds in the same browser, and a scanner
+      // without that cookie can't use the code up.
       if(!tokenHash && code){
         const {error}=await client.auth.exchangeCodeForSession(code);
         if(error)
           return confirmationPage(res,origin,400,'This link expired or was already used','Each link works once and expires quickly. Request a new email, then open the most recent message. If you opened this on a different device, open it on the device where you requested it, or request a new link.');
-        res.statusCode=303;res.setHeader('Location',origin+CONFIRMATION_TYPES.recovery);return res.end();
+        res.statusCode=303;res.setHeader('Location',origin+SET_PASSWORD);return res.end();
       }
-      if(!Object.hasOwn(CONFIRMATION_TYPES,type) || !tokenHash)
+      if(!LINK_TYPES.includes(type) || !tokenHash)
         return confirmationPage(res,origin,400,'This link is not valid','Request a new confirmation or password recovery email, then open the most recent message.');
-      const {error}=await client.auth.verifyOtp({token_hash:tokenHash,type});
-      if(error)
-        return confirmationPage(res,origin,400,'This link expired or was already used','Each link works once and expires quickly. Request a new email, then open the most recent message.');
-      res.statusCode=303;res.setHeader('Location',origin+CONFIRMATION_TYPES[type]);return res.end();
+      res.statusCode=303;res.setHeader('Location',origin+SET_PASSWORD+'?'+new URLSearchParams({token_hash:tokenHash,type}));return res.end();
     }
     if (path==='/auth/verify' && req.method==='POST') {
-      if(!['invite','recovery','signup'].includes(body.type)||typeof body.tokenHash!=='string')fail('Invalid setup link.');
+      // Save password on the set-password screen: the only place a token_hash link is checked. verifyOtp
+      // needs no PKCE verifier, so a link works on any device. The password is set further down, once the
+      // new session's profile has passed the same gate as /set-password.
+      if(!LINK_TYPES.includes(body.type)||typeof body.tokenHash!=='string'||!body.tokenHash)fail('Invalid setup link.');
+      password(body.newPassword); // A password the app refuses must not use the link up.
       const {error}=await client.auth.verifyOtp({token_hash:body.tokenHash,type:body.type});
-      if(error)fail('This link expired or was already used. Request a new link.');
-      return send(res,200,{ok:true});
+      if(error?.status===429)fail('Too many attempts. Wait a minute, then try again.',429);
+      if(error && !(error.status>=400 && error.status<500))fail('Your link couldn’t be checked just now. Try again in a moment.',503);
+      if(error)fail(LINK_USED,410);
     }
     const {data:{user:authUser}}=await client.auth.getUser();
     let profile=null;
@@ -174,12 +177,15 @@ export async function handle(req,res,env=process.env) {
       if(env.GMAIL_ADDRESS&&env.GMAIL_APP_PASSWORD)await flushEmails(env).catch(()=>{});
       return send(res,200,data);
     }
-    if(path==='/password' || path==='/set-password') {
+    if(path==='/password' || path==='/set-password' || path==='/auth/verify') {
       password(body.newPassword);
       if(path==='/password') {
         const {error}=await client.auth.signInWithPassword({email:profile.email,password:String(body.currentPassword||'')});if(error)fail('Current password is incorrect.',401);
       }
-      const {error}=await client.auth.updateUser({password:body.newPassword});if(error)fail('The password could not be updated. Reauthenticate and try again.');
+      const {error}=await client.auth.updateUser({password:body.newPassword});
+      // The link is used up by now, but its session cookie is set, so the screen retries through /set-password.
+      if(error && path==='/auth/verify')fail('Your link worked, but this password couldn’t be saved. Choose a different one and save again.',422);
+      if(error)fail('The password could not be updated. Reauthenticate and try again.');
       const signedOut=await client.auth.signOut({scope:'others'});if(signedOut.error)fail('Password changed, but other sessions could not be revoked. Contact the gym.',502);
       return send(res,200,{ok:true});
     }

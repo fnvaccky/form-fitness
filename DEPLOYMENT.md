@@ -42,9 +42,11 @@ Configure Supabase's own Auth email provider for confirmation/recovery. This is 
 
 ### Email confirmation links
 
-`GET /api/auth/callback` verifies a Supabase `token_hash` with `verifyOtp` and accepts the types `signup`, `email`, `recovery` and `invite`. It redirects a confirmed signup to `/` (already signed in, password chosen at registration) and recovery or invite to `/#/set-password`. Anything invalid, expired or replayed renders an HTML page, because these URLs are opened directly by a mail client.
+`GET /api/auth/callback` never uses the token, because link scanners (Google Safe Browsing, Gmail, Brave) open email links before people do (BUG-011). For a `token_hash` link of type `signup`, `email`, `recovery` or `invite` it only redirects to `/#/set-password?token_hash=…&type=…`. Browsers never send the fragment to a server or put it in a referrer. The page reads the token once, removes it from the address bar and history, and keeps it in memory. A link with a missing token or an unknown type renders an HTML page, because these URLs are opened directly by a mail client.
 
-This replaces the previous PKCE `code` exchange. `@supabase/ssr` forces `flowType: 'pkce'` on the server client, and the PKCE code verifier lives in a cookie belonging to the browser that started the flow, so a code link failed whenever a member opened their email on a different device. `verifyOtp` carries no verifier and works across devices.
+**Save password** sends one `POST /api/auth/verify` with the token and the new password. The server checks the password rules first, so a refused password leaves the link usable. It then verifies the token with `verifyOtp`, checks the account the same way `/set-password` does, sets the password and signs out the account's other sessions. A used or expired link returns 410, and the screen offers **Forgot password**. Public signup is disabled, so in practice these links are recovery links; a signup link would also land on this screen.
+
+`verifyOtp` replaces the previous PKCE `code` exchange. `@supabase/ssr` forces `flowType: 'pkce'` on the server client, and the PKCE code verifier lives in a cookie belonging to the browser that started the flow, so a code link failed whenever a member opened their email on a different device. `verifyOtp` carries no verifier and works across devices. The callback still accepts `?code=` from Supabase's default templates. That only works in the browser that requested the email, and a scanner without that browser's verifier cookie can't use the code up.
 
 Both email templates must therefore use `{{ .TokenHash }}`, not `{{ .ConfirmationURL }}`. In Supabase Authentication > Email Templates:
 
