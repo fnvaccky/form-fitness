@@ -222,6 +222,7 @@ Fix: `passwordRefusal` in `src/validation.js` maps Supabase's refusal to a clear
 - The link save keeps its 422-then-retry behaviour, with the same message on both. Unknown errors keep the generic messages, and nothing echoes the password.
 - `DEPLOYMENT.md` says the hosted password settings must match the app rule.
 - Config change Clark is making, in the dashboard: minimum password length **8**, password requirements **Lowercase, uppercase letters, digits and symbols**. Until then, 8–11 character passwords are refused, now with that reason shown.
+- Released 2026-10-12. `main` was fast-forwarded to `6f0f3f1`, and Production deployment `dpl_FyeRkHz6agQh1cgiUUcDoK9r6WTX` is READY. Smoke tests pass. No migration.
 Test added: `tests/unit.test.js`:
 - "Save password from a link says why the account server refused the password";
 - "the retry and Change password give the same reasons" (both cover weak length, weak character kinds, both together, breached, same password, a missing session and reauthentication; nothing echoes the password);
