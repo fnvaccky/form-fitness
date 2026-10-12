@@ -297,3 +297,15 @@ Verification:
 - Plans and settings unchanged.
 - The live smoke tests pass (17 of 17).
 - The administrator's `/api/state` reads succeed under RLS, simulated as the administrator in a rolled-back transaction.
+
+## BUG-014: Another business's PayMongo events got 404 from our webhook   (status: fixed)
+Reported: 2026-10-12 by Clark. Where: `POST /api/paymongo/webhook`, on the shared PayMongo test account.
+What happened: The PayMongo account is shared with JMAC, whose webhook is `hook_TWxE…`. Webhooks are account-wide, so JMAC's paid checkouts also reach our webhook, correctly signed with our secret. The handler answered 404 "Unknown PayMongo checkout". That makes PayMongo keep retrying, and it can eventually get our webhook disabled.
+Fix (`handleWebhook` in `src/paymongo.js`):
+- **Not ours:** for a verified `checkout_session.payment.paid` event whose checkout isn't ours, the webhook answers 200 `{"ok":true,"ignored":"not_ours"}` and records nothing. "Not ours" means no checkout has that `session_id`, and no checkout's id is the `reference_number`.
+- **Bad signatures stay 401,** checked before anything else.
+- **A RepReady checkout is never "not ours":** it still matches by session, or by reference number when the event arrives before the session is bound.
+- **Another workspace:** a RepReady checkout of another workspace gets `"ignored":"other_workspace"` instead, and is left for that workspace's deployment.
+Test added:
+- `tests/unit.test.js`: a JMAC-style reference; a foreign UUID; another workspace; a bad signature, refused with 401 before any database request; our unbound checkout goes on to bind. With the old 404, the test fails.
+- `tests/paymongo.js`: two foreign signed events get `not_ours`, with payment and checkout counts unchanged; a bad signature stays 401; the old 404 assertion now expects `not_ours`. The early-webhook scenario still settles our unbound checkout.
