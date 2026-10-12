@@ -6,6 +6,7 @@ import { fulfillRegistration } from './onboarding.js';
 import {createCheckout,reconcileCheckout,recoverCheckout,cancelCheckout,handleWebhook} from './paymongo.js';
 import {createStaff,updateStaff,setStaffEnabled,resendStaffSetup} from './staff.js';
 import {createMember} from './members.js';
+import {attendanceReport} from './attendance.js';
 import {deleteUnpaidAccount,runAutomaticCleanup,cronAuthorized} from './cleanup.js';
 import { flushEmails } from './notifications.js';
 
@@ -141,6 +142,8 @@ export async function handle(req,res,env=process.env) {
     if(path==='/login')return send(res,200,{ok:true,user:userView(profile)});
     if(path==='/state' && req.method==='GET')return send(res,200,await stateFor(client,profile,env));
     if(path==='/qr' && req.method==='GET')return send(res,200,await rpc('qr'));
+    // Task 13: attendance for gym staff, read through the caller's session (RLS keeps it to their workspace).
+    if(path==='/reports/attendance' && req.method==='GET'){gymStaff();return send(res,200,await attendanceReport(client,Object.fromEntries(url.searchParams),today()));}
     if(req.method!=='POST')fail('Endpoint not found.',404);
     if(path==='/staff'){admin();return send(res,201,await createStaff(client,body,env,origin));}
     if(path==='/staff/update'){admin();return send(res,200,await updateStaff(client,body));}

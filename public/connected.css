@@ -14,3 +14,11 @@
 .password-checklist{display:flex;flex-wrap:wrap;gap:2px 12px;margin:0;padding:0;list-style:none;font-size:10px;line-height:1.5;color:#89977e}.password-checklist li{display:inline-flex;align-items:center;gap:4px}.password-checklist li[data-met="true"]{color:var(--green)}.password-check-icon .icon{width:11px;height:11px;stroke-width:2.2}.visually-hidden{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 .password-input input::-ms-reveal,.password-input input::-ms-clear{display:none}
 .checkout-actions{display:flex;flex-wrap:wrap;gap:6px}
+/* Task 13: attendance. Five dashboard cards fit one row on wide screens; below 900px the grid keeps its two columns. */
+@media(min-width:901px){.stats-grid.with-visits{grid-template-columns:repeat(5,minmax(0,1fr))}.stats-grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.attendance-body{padding:0 23px 21px}.attendance-body>:last-child{margin-bottom:0}
+.attendance-filters{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px;margin:4px 0 20px}
+.attendance-filters .field{min-width:150px;margin:0}
+.my-visits{margin-top:22px}
+/* Administrators have five Members tabs: on phones the tab bar scrolls sideways instead of widening the page. */
+@media(max-width:680px){.attendance-body{padding:0 18px 18px}.tabs[aria-label="Membership sections"]{overflow-x:auto;scrollbar-width:none}.tabs[aria-label="Membership sections"]::-webkit-scrollbar{display:none}.tabs[aria-label="Membership sections"] .tab:focus-visible{outline-offset:-3px}}
