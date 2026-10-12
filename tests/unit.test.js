@@ -1149,6 +1149,11 @@ test('shipped pages carry no FORM branding and no Google app-password form',asyn
  const headline=connected.match(/<h1>(Your next chapter.*?)<\/h1>/)[1];
  assert.equal(headline.replace(/<br>/g,'').replace(/\s+/g,' '),'Your next chapter starts here.','phones hide the line break, so the words need their own space');
 });
+test('the page carries the Google site-verification tag exactly as given, once, in the head',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const html=await readFile('public/index.html','utf8'),tag='<meta name="google-site-verification" content="_bWI_6cu7f4wOCIDhp95RFKl540o4A7dHaf8CVqBAdM" />';
+ assert.equal(html.split(tag).length-1,1);assert(html.indexOf(tag)<html.indexOf('</head>'));
+});
 test('the favicon is the RepReady R mark in the sidebar colours, with an apple-touch-icon',async()=>{
  const {readFile}=await import('node:fs/promises');
  const svg=await readFile('public/favicon.svg','utf8'),html=await readFile('public/index.html','utf8');
