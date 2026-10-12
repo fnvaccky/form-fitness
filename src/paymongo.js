@@ -172,9 +172,10 @@ export async function recoverCheckout(row,sessionId,env,origin){
 // Task 09: an administrator closes an unpaid checkout so its invoice or registration can be paid another way.
 // PayMongo decides: a paid session is settled instead, and nothing changes here unless PayMongo confirms the
 // session is expired. A payment that still arrives later settles normally (paymongo_settle accepts expired).
-export async function cancelCheckout(client,row,env,origin){
- testCheckout(row,env);
- row=result(await client.rpc('ff_paymongo_cancel',{action:'check',body:{id:row.id}})); // the database checks the administrator too
+// PayMongo decides whether an open checkout can close. It settles a payment that came in and returns
+// {paid:true,outcome}; or returns {sessionId,providerStatus,via} once PayMongo confirms the session expired.
+// When PayMongo can't confirm either, it throws and nothing changes here. Callers record the expiry.
+async function closeAtPaymongo(row,env,origin){
  const sessionId=row.session_id||row.review_details?.sessionId;
  if(!SESSION_ID.test(sessionId||''))fail('This checkout has no PayMongo session to close. Check PayMongo for its reference before trying again.',409);
  const db=serviceClient(env),candidate={...row,session_id:sessionId},methods=requirePaymongoTestMode(env).methods;
@@ -182,36 +183,39 @@ export async function cancelCheckout(client,row,env,origin){
   const {status,data}=await request(env,'/v1/checkout_sessions/'+encodeURIComponent(sessionId));
   try{return {status,session:data,paid:validateSession(data,candidate,methods)};}catch(error){return review(db,row,error);}
  };
- // Keeps the settlement's own message too, e.g. whether the member's account and setup email are done.
- const settleInstead=async()=>{
-  const outcome=row.session_id?await reconcileCheckout(row,env,origin):await recoverCheckout(row,sessionId,env,origin);
-  return {...outcome,cancelled:false,message:['PayMongo shows this checkout was paid, so the payment was recorded instead of cancelling it.',outcome.message].filter(Boolean).join(' ')};
- };
- const close=async(providerStatus,via)=>{
-  row=result(await client.rpc('ff_paymongo_cancel',{action:'expire',body:{id:row.id,sessionId,providerStatus,via}}));
-  return {checkout:checkoutView(row),cancelled:true,message:'Checkout cancelled. The member can now pay another way.'};
- };
+ const settled=async()=>({paid:true,outcome:row.session_id?await reconcileCheckout(row,env,origin):await recoverCheckout(row,sessionId,env,origin)});
  let current=await read();
- if(current.paid)return settleInstead();
- if(current.session.attributes.status==='expired')return close(current.status,'already_expired');
+ if(current.paid)return settled();
+ if(current.session.attributes.status==='expired')return {sessionId,providerStatus:current.status,via:'already_expired'};
  let expired;
  try{expired=await request(env,'/v1/checkout_sessions/'+encodeURIComponent(sessionId)+'/expire',{method:'POST'});}
  catch(error){
   // PayMongo answers 400 if the session is already expired, paid, or has a payment in progress: look again.
   if(error.providerStatus===400){
    current=await read();
-   if(current.paid)return settleInstead();
-   if(current.session.attributes.status==='expired')return close(current.status,'already_expired');
+   if(current.paid)return settled();
+   if(current.session.attributes.status==='expired')return {sessionId,providerStatus:current.status,via:'already_expired'};
    fail('PayMongo did not close this checkout, possibly because a payment is in progress. Nothing was changed. Check the payment status in a few minutes.',409);
   }
   fail(`PayMongo could not close this checkout${error.providerStatus?` (HTTP ${error.providerStatus})`:''}. Nothing was changed. Try again later.`,502);
  }
  // Confirm with a fresh read rather than trusting the response. A payment that slipped in is settled instead.
  current=await read();
- if(current.paid)return settleInstead();
+ if(current.paid)return settled();
  if(current.session.attributes.status!=='expired')fail('PayMongo did not confirm the checkout is closed. Nothing was changed. Try again.',502);
- return close(expired.status,'expire');
+ return {sessionId,providerStatus:expired.status,via:'expire'};
 }
+export async function cancelCheckout(client,row,env,origin){
+ testCheckout(row,env);
+ row=result(await client.rpc('ff_paymongo_cancel',{action:'check',body:{id:row.id}})); // the database checks the administrator too
+ const closed=await closeAtPaymongo(row,env,origin);
+ // Keeps the settlement's own message too, e.g. whether the member's account and setup email are done.
+ if(closed.paid)return {...closed.outcome,cancelled:false,message:['PayMongo shows this checkout was paid, so the payment was recorded instead of cancelling it.',closed.outcome.message].filter(Boolean).join(' ')};
+ row=result(await client.rpc('ff_paymongo_cancel',{action:'expire',body:{id:row.id,sessionId:closed.sessionId,providerStatus:closed.providerStatus,via:closed.via}}));
+ return {checkout:checkoutView(row),cancelled:true,message:'Checkout cancelled. The member can now pay another way.'};
+}
+// Task 10: account clean-up runs the same PayMongo step; the clean-up function records the expiry.
+export async function closeCheckoutForCleanup(row,env,origin){testCheckout(row,env);return closeAtPaymongo(row,env,origin);}
 export function verifySignature(raw,header,env,now=Date.now()){
  requirePaymongoTestMode(env);
  const parts={};

@@ -9,13 +9,14 @@ const paths={grid:'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',users:
 const icon=(name)=>`<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${paths[name]||paths.grid}"/></svg>`;
 const esc=(s)=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=(n)=>'₱'+Number(n).toLocaleString('en-PH',{minimumFractionDigits:Number(n)%1?2:0,maximumFractionDigits:2});
-const date=(d,short=false)=>new Date(d+'T12:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short',...(short?{}:{year:'numeric'})});
+const date=(d,short=false)=>!d?'—':new Date(d+'T12:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short',...(short?{}:{year:'numeric'})});
 const addDays=(d,n)=>{const t=new Date(d+'T12:00:00Z');t.setUTCDate(t.getUTCDate()+n);return t.toISOString().slice(0,10)};
 const dayDiff=(a,b)=>Math.round((new Date(a+'T12:00:00Z')-new Date(b+'T12:00:00Z'))/86400000);
 const initials=(name)=>name.trim().split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase();
 const uid=(prefix)=>prefix+'-'+crypto.randomUUID().slice(0,8).toUpperCase();
 const round=(n)=>Math.round(Number(n)*100)/100;
-const planOf=(id)=>plans.find(p=>p.id===id)||plans[0];
+const NO_PLAN={id:'',name:'No plan yet',price:0,days:0,features:[],desc:'',tag:''};
+const planOf=(id)=>plans.find(p=>p.id===id)||(id?plans[0]:NO_PLAN);
 let storageOK=true,state={version:2,members:[],invoices:[],payments:[],activity:[],submissions:[],checkins:[]};
 let mode='admin',section='overview',memberTab='roster',paymentTab='invoices',selectedMember=state.members[0]?.id||'',query='',filter='all',chartRange='6',modal=null,lastFocus=null,registration=null,paymentInvoice=null,toastTimer;
 const memberById=(id)=>state.members.find(m=>m.id===id);
@@ -23,7 +24,7 @@ const paid=(inv)=>(inv.paidCents??state.payments.filter(p=>p.invoiceId===inv.id)
 const balance=(inv)=>inv?Math.max(0,(inv.amountCents??Math.round(inv.amount*100))-(inv.paidCents??Math.round(paid(inv)*100)))/100:0;
 const invoiceStatus=(inv)=>balance(inv)===0?'Paid':paid(inv)>0?'Partial':inv.due<DEMO_DATE?'Overdue':'Unpaid';
 const currentInvoice=(m)=>state.invoices.find(i=>i.memberId===m.id&&i.start===m.start&&i.end===m.end);
-const memberStatus=(m)=>m.enabled===false?'Inactive':m.end<DEMO_DATE?'Expired':balance(currentInvoice(m))>0?'Pending':m.start>DEMO_DATE?'Scheduled':'Active';
+const memberStatus=(m)=>m.enabled===false?'Inactive':!m.end?'No plan':m.end<DEMO_DATE?'Expired':balance(currentInvoice(m))>0?'Pending':m.start>DEMO_DATE?'Scheduled':'Active';
 const memberBalance=(m)=>round(state.invoices.filter(i=>i.memberId===m.id).reduce((s,i)=>s+balance(i),0));
 const badge=(status)=>`<span class="badge ${status.toLowerCase()}">${esc(status)}</span>`;
 const avatar=(m,i=0)=>`<span class="avatar ${['','peach','blue','lilac'][i%4]}">${esc(initials(m.name))}</span>`;

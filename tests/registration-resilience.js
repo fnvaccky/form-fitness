@@ -5,6 +5,9 @@ import {readFile} from 'node:fs/promises';
 import {handle} from '../src/api.js';
 import {serviceClient,result} from '../src/supabase.js';
 import {today} from '../src/validation.js';
+import {legacyRegistration} from './legacy-registration.js';
+// A paid-first registration saved before Task 10 (account first) must still finish: cash, the account,
+// one payment, and email retries. Add member no longer makes these rows; the helper makes one the old way.
 assert(['localhost','127.0.0.1'].includes(new URL(process.env.SUPABASE_URL).hostname));
 const db=serviceClient();const staff=JSON.parse(await readFile('.local/local-test-credentials.json','utf8')).accounts.find(a=>a.role==='staff');
 const server=http.createServer((req,res)=>handle(req,res,{...process.env,APP_ORIGIN:origin}));let origin,registrationId,conflictId,memberId;
@@ -14,9 +17,9 @@ try{
  await call('/login',{email:staff.email,password:staff.password});
  const email=`resilience-${randomUUID().slice(0,8)}@example.invalid`,requestId=randomUUID();
  const details={name:'LOCAL TEST Resilience',email,phone:'09170000007',plan:'basic',start:today(),requestId};
- const pending=await call('/members',details,201);registrationId=pending.registration.id;
- assert.equal((await call('/members',details,201)).registration.id,registrationId);
- await call('/members',{...details,name:'Different Name'},400);
+ const pending=await legacyRegistration(staff,details);registrationId=pending.registration.id;
+ assert.equal((await legacyRegistration(staff,details)).registration.id,registrationId);
+ await assert.rejects(legacyRegistration(staff,{...details,name:'Different Name'}),/used for different details/);
  await call('/registration-payment',{id:registrationId,amount:pending.registration.amount_cents/100,method:'Cash',verified:true,emailConfirmed:true,idempotencyKey:randomUUID(),retryEmail:true,emailChecked:false},400);
  assert.equal(result(await db.from('ff_registrations').select('status').eq('id',registrationId).single()).status,'awaiting_payment','Invalid email retry must not record cash');
  // An external account appears after registration but before collection.
@@ -33,7 +36,7 @@ try{
  await call('/registration-fulfill',{id:registrationId,retryEmail:true,emailChecked:false},400);
  const retried=await call('/registration-fulfill',{id:registrationId,retryEmail:true,emailChecked:true});assert.equal(retried.accountReady,true);
  assert.equal(result(await db.from('ff_payments').select('id').eq('member_id',memberId)).length,1);
- console.log('PASS: pending registration retries are idempotent; account collision preserves cash; completion retries create one account/payment; email retry requires review');
+ console.log('PASS: an older pending registration still finishes: retries are idempotent; account collision preserves cash; completion retries create one account/payment; email retry requires review');
 }finally{
  server.close();if(registrationId)result(await db.from('ff_registrations').delete().eq('id',registrationId));if(conflictId)await db.auth.admin.deleteUser(conflictId);
  if(memberId){for(const table of ['ff_checkins','ff_submissions','ff_payments','ff_notifications','ff_invoices','ff_memberships'])result(await db.from(table).delete().eq('member_id',memberId));result(await db.from('ff_profiles').delete().eq('id',memberId));await db.auth.admin.deleteUser(memberId);}

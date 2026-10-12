@@ -18,7 +18,7 @@ async function staffAdmin(client,action,body){
  return result(response);
 }
 // Same path as member onboarding: recovery email -> /api/auth/callback -> /#/set-password.
-async function sendSetupLink(env,origin,email){
+export async function sendSetupLink(env,origin,email){
  try{const {error}=await serviceClient(env).auth.resetPasswordForEmail(email,{redirectTo:origin+'/api/auth/callback'});return !error;}
  catch{return false;}
 }

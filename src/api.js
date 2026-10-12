@@ -5,6 +5,8 @@ import { BUCKET, stateFor, planView, paymentView, userView, signedImage } from '
 import { fulfillRegistration } from './onboarding.js';
 import {createCheckout,reconcileCheckout,recoverCheckout,cancelCheckout,handleWebhook} from './paymongo.js';
 import {createStaff,updateStaff,setStaffEnabled,resendStaffSetup} from './staff.js';
+import {createMember} from './members.js';
+import {deleteUnpaidAccount,runAutomaticCleanup,cronAuthorized} from './cleanup.js';
 import { flushEmails } from './notifications.js';
 
 function send(res, status, data) { res.statusCode=status; res.end(JSON.stringify(data)); }
@@ -55,6 +57,12 @@ export async function handle(req,res,env=process.env) {
     const url=new URL(req.url,origin);
     const path=url.pathname==='/api'&&url.searchParams.has('__path')?'/'+url.searchParams.get('__path'):url.pathname.replace(/^\/api/,'')||'/';
     if(path==='/paymongo/webhook')return await handleWebhook(req,res,env,origin);
+    // Task 10: the daily clean-up of never-paid accounts. Vercel Cron calls it with the CRON_SECRET bearer token.
+    if(path==='/cron/account-cleanup'){
+      if(req.method!=='GET')fail('Method not allowed.',405);
+      if(!cronAuthorized(req.headers.authorization,env.CRON_SECRET))fail('Not authorized.',401);
+      return send(res,200,await runAutomaticCleanup(env,origin));
+    }
     if (!['GET','POST'].includes(req.method)) fail('Method not allowed.',405);
     if (req.method==='POST' && req.headers.origin!==origin) fail(`This page was opened from a different address than the app expects. Open ${origin} and try again.`,403);
     const body=req.method==='POST'?await readBody(req):{};
@@ -150,16 +158,12 @@ export async function handle(req,res,env=process.env) {
       return send(res,200,await reconcileCheckout(checkout,env,origin));
     }
     if(path==='/members') {
-      // Save contact and plan details first. Trusted member provisioning follows full payment.
+      // Task 10, account first: the account now, an optional plan, and the member's own setup email.
+      // First registrations saved before this change still finish through /registration-payment.
       gymStaff();
-      // Defence in depth. The metadata below is already a fixed allowlist, so no request field can
-      // reach app_metadata, but refuse an attempt outright rather than silently discarding it.
-      for(const key of ['role','ff_role','ff_workspace','workspace','app_metadata','app_meta_data'])
-        if(key in body)fail('Accounts created here are always members. Remove the role field and try again.');
-      const info=contacts(body);startDate(body.start);
-      const registration=result(await client.rpc('ff_registration',{action:'create',body:{...info,goal:body.goal,plan:body.plan,start:body.start,requestId:body.requestId}}));
-      return send(res,201,{registration,accountReady:false,invitationSent:false});
+      return send(res,201,await createMember(client,body,env,origin));
     }
+    if(path==='/members/delete-unpaid'){admin();return send(res,200,await deleteUnpaidAccount(client,body,env,origin));}
     if(path==='/registration-payment' || path==='/registration-fulfill') {
       gymStaff();
       if(body.retryEmail && body.emailChecked!==true)fail('Check delivery before resending a setup email.');

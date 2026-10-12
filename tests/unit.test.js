@@ -632,17 +632,92 @@ test('members and administrators keep their existing access',async()=>{
   }finally{admin.close();}
 });
 
-test('staff registration saves pending details without an Auth account or email',async()=>{
- const staff=await consoleSession('staff');
+// Task 10, account first: Add member creates the account at once, with no plan, and no registration.
+test('Add member creates the member account at once, with no plan, through the Auth admin API',async()=>{
+ const memberId='99999999-0000-0000-0000-000000000009';
+ const staff=await consoleSession('staff',{routes:{
+  '/rest/v1/rpc/ff_member_admin':(req,res)=>res.end(JSON.stringify({email:req.body.body.email,workspace:'production'})),
+  '/auth/v1/admin/users':(req,res)=>res.end(JSON.stringify({id:memberId,aud:'authenticated',role:'authenticated',email:req.body.email,app_metadata:req.body.app_metadata,user_metadata:req.body.user_metadata,created_at:new Date().toISOString()})),
+  '/auth/v1/recover':(req,res)=>res.end('{}')}});
+ try{
+  const base={name:'New Member',email:'New-Member@example.invalid',phone:'+63 917 000 0009',goal:'Get stronger'};
+  const response=await staff.post('/members',base),value=await response.json();
+  assert.equal(response.status,201,value.error);
+  assert.deepEqual(value.member,{id:memberId,name:'New Member',email:'new-member@example.invalid',phone:'09170000009'});
+  assert.equal(value.invoiceId,null,'no plan, so no invoice');assert.equal(value.setupEmailSent,true);
+  const created=staff.state.requests.find(r=>r.path==='/auth/v1/admin/users');
+  assert.deepEqual(created.body.app_metadata,{ff_workspace:'production',ff_role:'member'},'always a member');
+  assert.deepEqual(Object.keys(created.body.user_metadata).sort(),['form_fitness','goal','name','phone'],'no plan or start');
+  assert.equal(created.body.email_confirm,true);
+  assert.equal(staff.state.requests.some(r=>r.path==='/rest/v1/rpc/ff_registration'),false,'no first registration any more');
+  assert(staff.state.requests.some(r=>r.path==='/auth/v1/recover'),'the member gets the same setup email staff do');
+  const before=staff.state.requests.length;
+  for(const field of [{role:'admin'},{ff_role:'staff'},{workspace:'demo'},{app_metadata:{ff_role:'admin'}},{password:'Chosen9!pass'}])
+   assert.equal((await staff.post('/members',{...base,...field})).status,400,JSON.stringify(field));
+  assert(!staff.state.requests.slice(before).some(r=>r.path==='/auth/v1/admin/users'||r.path.startsWith('/rest/v1/rpc/')),'refused before the database or Auth is asked');
+  assert.equal((await staff.post('/signup',base)).status,403,'public sign-up stays off');
+ }finally{staff.close();}
+});
+test('a plan chosen at the desk becomes an unpaid invoice through the renew path',async()=>{
+ const memberId='99999999-0000-0000-0000-000000000010';
+ const staff=await consoleSession('staff',{routes:{
+  '/rest/v1/rpc/ff_member_admin':(req,res)=>res.end(JSON.stringify({email:req.body.body.email,workspace:'production'})),
+  '/auth/v1/admin/users':(req,res)=>res.end(JSON.stringify({id:memberId,aud:'authenticated',role:'authenticated',email:req.body.email,app_metadata:{},user_metadata:{},created_at:new Date().toISOString()})),
+  '/auth/v1/recover':(req,res)=>res.end('{}'),
+  '/rest/v1/rpc/ff_command':(req,res)=>res.end(JSON.stringify({invoiceId:'99999999-0000-0000-0000-000000000011'}))}});
  try{
   const start=new Date(Date.now()+8*3600000).toISOString().slice(0,10);
-  const base={name:'New Member',email:'new-member@example.invalid',phone:'09170000009',plan:'basic',start,goal:'Improve fitness',requestId:'99999999-0000-0000-0000-000000000009'};
-  const response=await staff.post('/members',base);assert.equal(response.status,201);const value=await response.json();assert.equal(value.accountReady,false);assert.equal(value.invitationSent,false);assert.equal(value.registration.status,'awaiting_payment');
-  const call=staff.state.requests.find(entry=>entry.path==='/rest/v1/rpc/ff_registration');assert.equal(call.body.action,'create');
-  assert.equal(staff.state.requests.some(entry=>entry.path==='/auth/v1/invite'||entry.path==='/auth/v1/admin/users'),false);
-  for(const escalation of [{role:'admin'},{ff_role:'staff'},{workspace:'demo'},{app_metadata:{ff_role:'admin'}}])assert.equal((await staff.post('/members',{...base,...escalation})).status,400);
-  assert.equal((await staff.post('/signup',base)).status,403);
+  const response=await staff.post('/members',{name:'Plan Member',email:'plan-member@example.invalid',phone:'09170000010',plan:'basic',start}),value=await response.json();
+  assert.equal(response.status,201,value.error);assert.equal(value.invoiceId,'99999999-0000-0000-0000-000000000011');
+  assert.deepEqual(staff.state.requests.find(r=>r.path==='/rest/v1/rpc/ff_command').body,{action:'renew',body:{memberId,plan:'basic',start}});
  }finally{staff.close();}
+});
+test('a simultaneous Add member for the same email gets the duplicate message, not a server error',async()=>{
+ // The loser of the race fails inside the Auth trigger, which GoTrue reports only as a database error.
+ let checks=0,taken=true;
+ const staff=await consoleSession('staff',{routes:{
+  '/rest/v1/rpc/ff_member_admin':(req,res)=>{
+   if(++checks>1&&taken){res.statusCode=400;return res.end(JSON.stringify({code:'P0001',message:'An account already uses this email.'}));}
+   res.end(JSON.stringify({email:req.body.body.email,workspace:'production'}));},
+  '/auth/v1/admin/users':(req,res)=>{res.statusCode=500;res.end(JSON.stringify({code:'unexpected_failure',msg:'Database error creating new user'}));}}});
+ try{
+  const body={name:'Race Member',email:'race@example.invalid',phone:'09170000011'};
+  const lost=await staff.post('/members',body);
+  assert.equal(lost.status,409);assert.deepEqual(await lost.json(),{error:'An account already uses this email.'});assert.equal(checks,2,'the database is asked again');
+  checks=0;taken=false;
+  const failed=await staff.post('/members',body);
+  assert.equal(failed.status,502,'any other Auth failure stays a server error');assert.equal(checks,2);
+ }finally{staff.close();}
+});
+test('only administrators reach Delete unpaid account, and the daily job needs its secret and its switch',async()=>{
+ const {cronAuthorized}=await import('../src/cleanup.js');
+ assert.equal(cronAuthorized('Bearer short','short'),false,'a secret under 16 characters never works');
+ assert.equal(cronAuthorized('Bearer wrong-wrong-wrong-wrong','right-right-right-right'),false);
+ assert.equal(cronAuthorized(undefined,'right-right-right-right'),false);
+ assert.equal(cronAuthorized('Bearer right-right-right-right','right-right-right-right'),true);
+ const staff=await consoleSession('staff');
+ try{
+  const before=staff.state.requests.length;
+  assert.equal((await staff.post('/members/delete-unpaid',{id:'99999999-0000-0000-0000-000000000012'})).status,403);
+  assert(!staff.state.requests.slice(before).some(r=>r.path.startsWith('/rest/v1/rpc/')),'refused before the database is asked');
+ }finally{staff.close();}
+ const secret='cron-secret-for-unit-tests';
+ for(const enabled of ['false','true']){
+  const deletes=[];
+  const t=await consoleSession('admin',{env:{CRON_SECRET:secret,ACCOUNT_CLEANUP_ENABLED:enabled},routes:{
+   '/rest/v1/rpc/ff_account_cleanup_auto':(req,res)=>{
+    if(req.body.action==='due')return res.end(JSON.stringify([{id:'99999999-0000-0000-0000-000000000013',openCheckouts:[]}]));
+    deletes.push(req.body.body);res.end(JSON.stringify({deleted:req.body.body.id,checkoutsExpired:0}));}}});
+  try{
+   const job=headers=>fetch(t.origin+'/api/cron/account-cleanup',{headers});
+   assert.equal((await job({})).status,401,'no secret');
+   assert.equal((await job({Authorization:'Bearer not-the-secret-at-all'})).status,401,'wrong secret');
+   const run=await job({Authorization:'Bearer '+secret}),body=await run.json();
+   assert.equal(run.status,200,body.error);
+   if(enabled==='false'){assert.deepEqual(body,{enabled:false,due:1,deleted:0,message:'Automatic clean-up is turned off.'});assert.equal(deletes.length,0,'off means nothing is deleted');}
+   else{assert.equal(body.deleted,1);assert.deepEqual(deletes,[{workspace:'production',id:'99999999-0000-0000-0000-000000000013',expired:[]}]);}
+  }finally{t.close();}
+ }
 });
 
 test('the staff shell relabels the admin console without changing its markup',async()=>{

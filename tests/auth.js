@@ -47,13 +47,12 @@ try{
  for(const values of [{phone:''},{phone:'123'},{plan:'missing'}])await call(member,'/signup',{name:'AUTH TEST Signup',email:`form-verification-signup-${suffix}@example.invalid`,phone:'09170000003',password,plan:'basic',start:today(),...values},403);
  pass('Production signup endpoint rejects missing/invalid contacts and plan before sending mail');
  const memberEmail=`form-verification-member-${suffix}@example.invalid`;
- const pending=await call(admin,'/members',{name:'AUTH TEST Member',email:memberEmail,phone:'09170000002',plan:'basic',start:today(),requestId:randomUUID()},201);
- assert.equal(pending.accountReady,false);assert.equal(pending.invitationSent,false);
- const paid=await call(admin,'/registration-payment',{id:pending.registration.id,amount:pending.registration.amount_cents/100,method:'Cash',verified:true,emailConfirmed:true,idempotencyKey:randomUUID()});
- assert.equal(paid.accountReady,true);assert.equal(paid.invitationSent,true);created.push(paid.registration.member_id);
+ // Task 10, account first: Add member creates the account at once and sends the setup email.
+ const added=await call(admin,'/members',{name:'AUTH TEST Member',email:memberEmail,phone:'09170000002',plan:'basic',start:today()},201);
+ created.push(added.member.id);assert.equal(added.setupEmailSent,true);assert(added.invoiceId,'The plan chosen at the desk is an unpaid invoice');
  const setup=await db.auth.admin.generateLink({type:'recovery',email:memberEmail});assert.equal(setup.error,null);const setupHash=setup.data.properties.hashed_token;
  await call(member,'/auth/verify',{type:'recovery',tokenHash:setupHash,newPassword:password});
- await call(member,'/logout',{});await call(member,'/login',{email:memberEmail,password});pass('First payment creates the account and sends setup email; Save password verifies the link and sets the password in one POST');
+ await call(member,'/logout',{});await call(member,'/login',{email:memberEmail,password});pass('Add member creates the account and sends the setup email; Save password verifies the link and sets the password in one POST');
  await call(member,'/logout',{});
  assert.deepEqual(await call(member,'/auth/verify',{type:'recovery',tokenHash:setupHash,newPassword:fresh('Reused')},410),{error:LINK_USED});pass('Invitation token cannot be reused');
  const recovery=await db.auth.admin.generateLink({type:'recovery',email:memberEmail});assert.equal(recovery.error,null);

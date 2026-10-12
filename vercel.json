@@ -4,6 +4,7 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist/client",
   "functions": { "api/index.js": { "maxDuration": 60 }, "api/paymongo-webhook.js": { "maxDuration": 60 } },
+  "crons": [ { "path": "/api/cron/account-cleanup", "schedule": "0 19 * * *" } ],
   "rewrites": [ { "source": "/api/paymongo/webhook", "destination": "/api/paymongo-webhook" }, { "source": "/api/:path*", "destination": "/api?__path=:path*" } ],
   "headers": [{ "source": "/(.*)", "headers": [
     { "key": "X-Content-Type-Options", "value": "nosniff" },

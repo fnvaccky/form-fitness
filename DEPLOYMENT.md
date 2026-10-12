@@ -98,6 +98,8 @@ Set these separately for preview and production in Vercel Settings > Environment
 | `GMAIL_ADDRESS` | Owner's authorized sender address |
 | `GMAIL_APP_PASSWORD` | Google app password; never a regular password |
 | `OWNER_EMAIL` | Owner contact for operational configuration |
+| `CRON_SECRET` | Random string of at least 16 characters (32 or more recommended). Vercel Cron sends it to the daily clean-up route; without it the route refuses every call. Production only. |
+| `ACCOUNT_CLEANUP_ENABLED` | `true` lets the daily job delete never-paid accounts. Leave it unset until Clark approves the list of accounts the first run would delete. |
 
 Do not enable shared demo credentials in a production workspace. The current deployed demo intentionally has no elevated key or Gmail credentials. The production environment already has encrypted Supabase URL, publishable key, server secret, production workspace and the exact protected production alias origin; these variables take effect on the next production deployment. To prepare real use, retain all-deployment protection, configure a separate production environment with `APP_WORKSPACE=production`, provision the owner administrator with the local script, verify real onboarding/recovery, and deploy only after configuration is complete.
 
@@ -162,6 +164,8 @@ Verification: `npm run test:onboarding` uses the installed Edge browser and loca
 
 ## Paid-first onboarding (supersedes registration-time invitations)
 
+Superseded for new members by account-first registration (Task 10, below). Registrations saved before that change still finish as described here.
+
 Apply `supabase/migrations/20261001184643_paid_first_registration.sql` to the target database before deploying this version. It adds `ff_registrations`, RLS-protected staff RPCs and a paid-registration branch in Auth provisioning. Existing members, invoices and payments are retained. The local database was updated using transactional SQL; the hosted project has not been changed. Review migration history before a local db push; do not replay this manually applied schema migration over existing objects.
 
 First registration is staff-assisted. POST /members saves pending details and a plan-price snapshot, with no Auth user or email. POST /registration-payment records the full verified cash amount in the pending registration, then creates a member account whose provisioning trigger atomically creates the paid cycle, invoice and one payment. Staff must verify the email address before cash confirmation. Cash payment is preserved if account creation fails; use the pending-registration completion action to retry without charging again. The completed account is emailed a password-setup link through Supabase Auth recovery mail. No permanent password or setup token is returned to staff. An uncertain email send requires delivery review before a manual retry.
@@ -193,3 +197,26 @@ An open online checkout blocks cash, receipt and new online payments for its inv
 - If the call fails or the result is uncertain, nothing changes here and the error is shown.
 - Each cancel appends an entry to the checkout's `review_log`: who, when, PayMongo's response status and the session id.
 - A payment PayMongo still confirms after a cancel (webhook or Check payment status) is recorded, because `paymongo_settle` accepts an expired checkout. If the target was paid another way meanwhile, the payment goes to review instead of being credited twice.
+
+## Account-first registration and unpaid-account clean-up (Task 10)
+
+Needs migration `20261012090000_account_first.sql`. It replaces paid-first registration for new members.
+
+- **Add member** (staff and administrators) asks for name, email, mobile and an optional goal. `POST /api/members` creates the member's Auth account straight away through the Auth admin API: role `member`, a random password nobody sees, and the same token-hash setup email staff get. Before that, `ff_member_admin('prepare-create')` checks in the database that the caller is gym staff and that no account, profile or pending registration uses the email (BUG-010). Public sign-up stays off.
+- **A plan at the desk is optional.** If staff pick a plan and start date, the renew path creates the unpaid cycle and invoice. With no plan there is no cycle or invoice.
+- **The member's first sign-in.** With no plan, their home asks them to choose one (renew, then invoice). With an unpaid plan, the pass bar says their membership starts after full payment, with **Pay now** (PayMongo invoice checkout); staff record cash at the desk as usual. The database gives no member pass, scan or check-in until a fully paid cycle covers today (`ff_command` `qr`, `scan` and `check-in`).
+- **Activation.** Online, only from PayMongo's verified signal: the signed webhook, or the server's own read of the session. Cash, when staff record it.
+- **Older registrations.** `/registration-payment`, `/registration-fulfill` and the registration PayMongo checkout still finish rows saved before this change. `ff_registration('create')` stays in the database so that a code rollback still has a working Add member; the new code never calls it. All of this can be removed once no unfinished registrations remain.
+
+### Deleting accounts that never paid
+
+- **Never-paid** means a member account with no payment ever, no paid online checkout and no payment submission waiting for review. The database also refuses an account with a paid or partly paid invoice, a check-in, a first registration, a retired PayMongo attempt or a staff audit entry. Staff and administrator accounts are never deleted: disable them instead. Each refusal is 42501 with a message that starts "Only never-paid member accounts can be deleted."
+- **PayMongo first.** Before a delete, the server checks every open online checkout at PayMongo with the Cancel checkout logic. If a payment came in, it is settled and the delete is refused. An unpaid session is expired first.
+- **What goes:** the Auth user, the profile, unpaid cycles and invoices, rejected payment submissions, unsent notifications, and the member's photo and receipt files. The email is free again at once.
+- **What stays:** payments, paid or partly paid invoices, check-ins and the staff audit log. The delete refuses if any exist. Closed online checkouts stay as payment history, detached from the account (`member_id`, `invoice_id` and a member-made `created_by` cleared, `detached_at` set). They hold no name or email; `request_details` keeps the old account id, the same id the log records. Sent notifications stay as the delivery record, detached.
+- **The log.** Each delete adds one row to `ff_account_cleanup_log`: who (or `automatic`), when, the account id, a SHA-256 hash of the email (never the email), the account's age and the reason. Administrators can read it. Nobody can write, change or delete its rows directly.
+- **By hand.** Members → **Unpaid accounts** (administrators only) lists each account's age. **Delete unpaid account** asks for confirmation: "This permanently deletes the account and frees the email. Only accounts that have never paid can be deleted." `POST /api/members/delete-unpaid` is admin-only, and the database checks again.
+- **The daily job.** `vercel.json` schedules Vercel Cron to call `GET /api/cron/account-cleanup` at 19:00 UTC (03:00 Manila), with `Authorization: Bearer <CRON_SECRET>`. It deletes never-paid member accounts older than 7 days, and the database applies the 7-day rule again. Vercel Cron runs on Production deployments only.
+- **It ships switched off.** Without `CRON_SECRET`, the route answers 401. With `CRON_SECRET` but without `ACCOUNT_CLEANUP_ENABLED=true`, the job only counts the accounts that are due and deletes nothing. Turn it on only after Clark approves the list of accounts the first run would delete.
+
+Verification: `tests/account-cleanup.sql` (database rules) and `npm run test:accounts` (API, mocked PayMongo, the daily job on the demo workspace, and the browser screens).

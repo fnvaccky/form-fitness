@@ -9,6 +9,9 @@ import {handle} from '../src/api.js';
 import {POST as hostedWebhook} from '../api/paymongo-webhook.js';
 import {serviceClient,result} from '../src/supabase.js';
 import {today} from '../src/validation.js';
+import {legacyRegistration} from './legacy-registration.js';
+// Task 10: Add member is account first now. The first-payment scenarios below finish paid-first
+// registrations saved before that change, which the helper makes the old way.
 assert(['localhost','127.0.0.1'].includes(new URL(process.env.SUPABASE_URL).hostname),'Local fixtures only');
 // All credentials are generated in memory; mock transport never contacts PayMongo.
 const env={...process.env,APP_WORKSPACE:'production',PAYMONGO_ALLOW_LIVE:'false',PAYMONGO_SECRET_KEY:'sk_test_'+randomBytes(24).toString('hex'),PAYMONGO_WEBHOOK_SECRET:randomBytes(32).toString('hex'),GMAIL_ADDRESS:'',GMAIL_APP_PASSWORD:''};
@@ -54,7 +57,7 @@ try{
  assert.equal(staffState.user.workspace,'production');assert.equal(staffState.paymongo.configured,true);assert.equal(staffState.paymongo.testMode,true);assert.deepEqual(staffState.paymongo.methods,['gcash','paymaya','grab_pay','card']);
  assert.equal(staffState.user.can.initiateOnlinePayment,true);assert.notEqual(staffState.user.can.recordOnlinePayment,true);
  const email='paymongo-local-'+randomUUID().slice(0,8)+'@example.invalid';
- const pending=await call('/members',{requestId:randomUUID(),name:'LOCAL TEST PayMongo',email,phone:'09170000004',plan:'basic',start:today()},201);registrationId=pending.registration.id;
+ const pending=await legacyRegistration(staff,{requestId:randomUUID(),name:'LOCAL TEST PayMongo',email,phone:'09170000004',plan:'basic',start:today()});registrationId=pending.registration.id;
  const request={kind:'registration',registrationId,emailConfirmed:true,method:'ewallet',requestId:randomUUID()};
  const key=env.PAYMONGO_SECRET_KEY;env.PAYMONGO_SECRET_KEY='';await call('/paymongo/checkout',request,503);env.PAYMONGO_SECRET_KEY=key;
  const first=await call('/paymongo/checkout',{...request,amount:1,price:1,total:1,amountCents:1});assert.equal(first.checkout.status,'pending');assert.equal((await call('/paymongo/checkout',request)).checkout.id,first.checkout.id);assert.equal(count,1);assert.equal(lastCreate.line_items[0].amount,pending.registration.amount_cents);assert.equal((await db.auth.admin.listUsers({perPage:1000})).data.users.some(u=>u.email===email),false,'No Auth account before verified payment');
@@ -125,7 +128,7 @@ try{
  await call('/paymongo/checkout',{kind:'invoice',invoiceId:randomUUID(),method:'card',requestId:randomUUID()},403);
  await call('/paymongo/checkout',{kind:'invoice',invoiceId,method:'card',requestId:randomUUID()},409);
  assert.equal(count,beforeGuards);
- const liveReplyRegistration=await call('/members',{requestId:randomUUID(),name:'LOCAL TEST Live rejection',email:'paymongo-live-reply-'+randomUUID()+'@example.invalid',phone:'09170000004',plan:'basic',start:today()},201);extraRegistrations.push(liveReplyRegistration.registration.id);
+ const liveReplyRegistration=await legacyRegistration(staff,{requestId:randomUUID(),name:'LOCAL TEST Live rejection',email:'paymongo-live-reply-'+randomUUID()+'@example.invalid',phone:'09170000004',plan:'basic',start:today()});extraRegistrations.push(liveReplyRegistration.registration.id);
  createReplyHook=async s=>{s.attributes.livemode=true;};
  try{await call('/paymongo/checkout',{kind:'registration',registrationId:liveReplyRegistration.registration.id,emailConfirmed:true,method:'card',requestId:randomUUID()},409);}finally{createReplyHook=undefined;}
  const liveHeld=result(await db.from('ff_checkouts').select('status,livemode').eq('registration_id',liveReplyRegistration.registration.id).single());assert.equal(liveHeld.status,'needs_review');assert.equal(liveHeld.livemode,false);
@@ -173,7 +176,7 @@ try{
 
  // A signed payment can arrive before the create response has been saved.
  await call('/login',staff);
- const early=await call('/members',{requestId:randomUUID(),name:'LOCAL TEST Early',email:'paymongo-early-'+randomUUID()+'@example.invalid',phone:'09170000004',plan:'basic',start:today()},201);extraRegistrations.push(early.registration.id);
+ const early=await legacyRegistration(staff,{requestId:randomUUID(),name:'LOCAL TEST Early',email:'paymongo-early-'+randomUUID()+'@example.invalid',phone:'09170000004',plan:'basic',start:today()});extraRegistrations.push(early.registration.id);
  earlyWebhook=true;
  let earlyResult;try{earlyResult=await call('/paymongo/checkout',{kind:'registration',registrationId:early.registration.id,emailConfirmed:true,method:'gcash',requestId:randomUUID()});}finally{earlyWebhook=false;}
  assert.equal(earlyResult.checkout.status,'paid');
@@ -183,7 +186,7 @@ try{
  assert.equal(result(await db.from('ff_payments').select('id').eq('member_id',earlyReg.member_id)).length,1);
  console.log('PASS: early webhook binds the durable reference safely; account/cycle/invoice/payment provision once');
  // Reproduce the old unbound create-response mismatch, using the saved provider ID only.
- const oldCreate=await call('/members',{requestId:randomUUID(),name:'LOCAL TEST Old create recovery',email:'paymongo-recovery-'+randomUUID()+'@example.invalid',phone:'09170000004',plan:'basic',start:today()},201);extraRegistrations.push(oldCreate.registration.id);
+ const oldCreate=await legacyRegistration(staff,{requestId:randomUUID(),name:'LOCAL TEST Old create recovery',email:'paymongo-recovery-'+randomUUID()+'@example.invalid',phone:'09170000004',plan:'basic',start:today()});extraRegistrations.push(oldCreate.registration.id);
  providerFailure=true;try{await call('/paymongo/checkout',{kind:'registration',registrationId:oldCreate.registration.id,emailConfirmed:true,method:'gcash',requestId:randomUUID()},502);}finally{providerFailure=false;}
  const savedSessionId='cs_Local'+count,oldRow=result(await db.from('ff_checkouts').select('*').eq('registration_id',oldCreate.registration.id).single());
  result(await db.rpc('ff_paymongo_review',{body:{id:oldRow.id,category:'checkout_reference_mismatch',sessionId:savedSessionId}}));
@@ -200,7 +203,7 @@ try{
  // Task 09 Part B: Cancel checkout. Each case gets its own unpaid first registration with an open card checkout.
  async function openCheckout(label){
   await call('/login',staff);
-  const made=await call('/members',{requestId:randomUUID(),name:'LOCAL TEST Cancel '+label,email:'paymongo-cancel-'+randomUUID()+'@example.invalid',phone:'09170000004',plan:'basic',start:today()},201);extraRegistrations.push(made.registration.id);
+  const made=await legacyRegistration(staff,{requestId:randomUUID(),name:'LOCAL TEST Cancel '+label,email:'paymongo-cancel-'+randomUUID()+'@example.invalid',phone:'09170000004',plan:'basic',start:today()});extraRegistrations.push(made.registration.id);
   const created=await call('/paymongo/checkout',{kind:'registration',registrationId:made.registration.id,emailConfirmed:true,method:'card',requestId:randomUUID()});
   return {registration:made.registration,row:result(await db.from('ff_checkouts').select('*').eq('id',created.checkout.id).single())};
  }
@@ -240,7 +243,7 @@ try{
  assert.equal((await call('/paymongo/cancel',{id:stale.row.id})).checkout.status,'expired');
  assert.equal(expireCalls,expiresBeforeStale,'Already expired at PayMongo: no expire call');assert.equal((await checkoutNow(stale.row.id)).review_log.at(-1).via,'already_expired');
  await call('/login',staff);
- const stuck=await call('/members',{requestId:randomUUID(),name:'LOCAL TEST Cancel stuck',email:'paymongo-cancel-'+randomUUID()+'@example.invalid',phone:'09170000004',plan:'basic',start:today()},201);extraRegistrations.push(stuck.registration.id);
+ const stuck=await legacyRegistration(staff,{requestId:randomUUID(),name:'LOCAL TEST Cancel stuck',email:'paymongo-cancel-'+randomUUID()+'@example.invalid',phone:'09170000004',plan:'basic',start:today()});extraRegistrations.push(stuck.registration.id);
  providerFailure=true;try{await call('/paymongo/checkout',{kind:'registration',registrationId:stuck.registration.id,emailConfirmed:true,method:'card',requestId:randomUUID()},502);}finally{providerFailure=false;}
  const stuckSession='cs_Local'+count,stuckRow=result(await db.from('ff_checkouts').select('*').eq('registration_id',stuck.registration.id).single());
  result(await db.rpc('ff_paymongo_review',{body:{id:stuckRow.id,category:'checkout_reference_mismatch',sessionId:stuckSession}}));
@@ -282,7 +285,7 @@ try{
  assert.equal(result(await db.from('ff_payments').select('method').eq('invoice_id',browserRenew.invoice_id).single()).method,'GrabPay');
  console.log('PASS: staff/member isolation, mobile selectors, no cash checkbox on card checkout, and scannable hosted-checkout QR');
  console.log('PASS: actual record-payment card and walk-in e-wallet form submissions create and verify checkouts');
- const uiRegistration=await call('/members',{requestId:randomUUID(),name:'LOCAL TEST Browser first payment',email:'paymongo-browser-'+randomUUID()+'@example.invalid',phone:'09170000004',plan:'basic',start:today()},201);extraRegistrations.push(uiRegistration.registration.id);
+ const uiRegistration=await legacyRegistration(staff,{requestId:randomUUID(),name:'LOCAL TEST Browser first payment',email:'paymongo-browser-'+randomUUID()+'@example.invalid',phone:'09170000004',plan:'basic',start:today()});extraRegistrations.push(uiRegistration.registration.id);
  await page.evaluate(async id=>{await refreshData();registrationCash(state.registrations.find(r=>r.id===id));},uiRegistration.registration.id);await page.selectOption('#registration-channel','gcash');await page.check('#registration-email-confirmed');
  const createdResponse=page.waitForResponse(r=>r.url()===origin+'/api/paymongo/checkout');await page.getByRole('button',{name:'Continue to secure checkout',exact:true}).click();assert.equal((await createdResponse).status(),200);await page.waitForURL('https://checkout.paymongo.com/**');
  const uiRow=result(await db.from('ff_checkouts').select('*').eq('registration_id',uiRegistration.registration.id).single());assert.equal(uiRow.status,'pending');assert.equal(new URL(page.url()).pathname,'/'+uiRow.session_id);

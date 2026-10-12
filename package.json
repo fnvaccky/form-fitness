@@ -21,7 +21,8 @@
     "test:staff": "node --env-file-if-exists=.env.local tests/staff.js",
     "test:emails": "node --env-file-if-exists=.env.local tests/email-uniqueness.js",
     "test:links": "node --env-file-if-exists=.env.local tests/auth-links.js",
-    "test:passwords": "node --env-file-if-exists=.env.local tests/password-fields.js"
+    "test:passwords": "node --env-file-if-exists=.env.local tests/password-fields.js",
+    "test:accounts": "node --env-file-if-exists=.env.local tests/accounts.js"
   },
   "engines": {
     "node": ">=22"

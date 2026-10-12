@@ -9,7 +9,7 @@ export const planView = p => ({ id:p.id, name:p.name, price:p.price_cents/100, p
 // permission from a role string. The database enforces the same split independently; this only
 // decides which existing controls are rendered.
 const CAPABILITIES = {
-  admin: ['roster','addMember','renew','recordCashPayment','recordOnlinePayment','initiateOnlinePayment','reviewPayment','scan','manageMember','manageStaff','cancelCheckout','plans','paymentSettings','systemSettings'],
+  admin: ['roster','addMember','renew','recordCashPayment','recordOnlinePayment','initiateOnlinePayment','reviewPayment','scan','manageMember','manageStaff','cancelCheckout','cleanupAccounts','plans','paymentSettings','systemSettings'],
   staff: ['roster','addMember','renew','recordCashPayment','initiateOnlinePayment','scan'],
   member: ['initiateOnlinePayment']
 };
@@ -24,14 +24,16 @@ export async function signedImage(client, path) {
   return result(await client.storage.from(BUCKET).createSignedUrl(path, 300)).signedUrl;
 }
 export async function stateFor(client, profile, env) {
-  const [profiles, cycles, invoices, payments, submissions, checkins, plans, settings, outbox, registrations, checkouts] = await Promise.all([
+  const [profiles, cycles, invoices, payments, submissions, checkins, plans, settings, outbox, registrations, checkouts, unpaidAccounts] = await Promise.all([
     allRows(client,'ff_profiles'), allRows(client,'ff_memberships'), allRows(client,'ff_invoices'), allRows(client,'ff_payments'), allRows(client,'ff_submissions'),
     client.from('ff_checkins').select('*').order('created_at',{ascending:false}).limit(50).then(result),
     client.from('ff_plans').select('*').order('price_cents').then(result),
     client.from('ff_settings').select('*').single().then(result),
     profile.role==='admin' ? client.from('ff_notifications').select('id,recipient,subject,status,error,created_at,sent_at').order('created_at',{ascending:false}).limit(50).then(result) : [],
     ['admin','staff'].includes(profile.role)?allRows(client,'ff_registrations'):[],
-    allRows(client,'ff_checkouts')
+    allRows(client,'ff_checkouts'),
+    // Task 10: never-paid member accounts, for the administrators' Unpaid accounts tab.
+    profile.role==='admin' ? client.rpc('ff_account_cleanup',{action:'list',body:{}}).then(result) : undefined
   ]);
   const current = today();
   const members = await Promise.all(profiles.filter(p=>p.role==='member').map(async p=> {
@@ -42,7 +44,7 @@ export async function stateFor(client, profile, env) {
   const destinations = {};
   for (const [key, value] of Object.entries(settings.payments || {})) destinations[key] = {...value,imagePath:value.image,image:await signedImage(client,value.image)};
   return {
-    user:userView(profile),date:current,members,staff:staffFor(profile,profiles),registrations,checkouts,paymongo:paymongoConfiguration(env),plans:plans.map(planView),
+    user:userView(profile),date:current,members,staff:staffFor(profile,profiles),unpaidAccounts,registrations,checkouts,paymongo:paymongoConfiguration(env),plans:plans.map(planView),
     invoices:invoices.map(i=>{const c=cycles.find(c=>c.id===i.membership_id);return {id:i.id,memberId:i.member_id,plan:c.plan_id,amount:i.amount_cents/100,amountCents:i.amount_cents,paidCents:i.paid_cents,start:c.start_date,end:c.end_date,due:c.start_date,created:datePH(i.created_at)};}),
     memberships:cycles,payments:payments.map(paymentView),
     submissions:await Promise.all(submissions.map(async s=>({id:s.id,invoiceId:s.invoice_id,memberId:s.member_id,amount:s.amount_cents/100,method:s.method,reference:s.reference,status:s.status,receipt:await signedImage(client,s.receipt),date:datePH(s.created_at)}))),

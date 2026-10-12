@@ -113,7 +113,7 @@ document.addEventListener('submit',event=>{
       else{try{await api('/set-password',{newPassword});}catch(e){if(e.status===410)return setupLinkExpired(e.message);throw e;}}
       history.replaceState({},'',location.pathname);closeModal();await installPaymongo();
 boot();toast('Password saved.');},
-    'renew-form':async()=>{await api('/renew',{memberId:document.getElementById('renew-member').value,plan:document.getElementById('renew-plan').value,start:document.getElementById('renew-start').value});await refreshData();closeModal();navigate('payments');toast('Renewal invoice created. Payment is still required.');},
+    'renew-form':async()=>{await api('/renew',{memberId:document.getElementById('renew-member').value,plan:document.getElementById('renew-plan').value,start:document.getElementById('renew-start').value});await refreshData();closeModal();navigate('payments');toast('Invoice created. Payment is still required.');},
     'edit-plan-form':async()=>{await api('/plans',{id:document.getElementById('plan-id').value,name:document.getElementById('plan-name').value,price:document.getElementById('plan-price').value,available:document.getElementById('plan-available').checked});await refreshData();closeModal();toast('Plan saved. Existing invoices are unchanged.');}
   };
   if(actions[form.id]){event.preventDefault();event.stopImmediatePropagation();runForm(form,actions[form.id]);}
@@ -150,7 +150,7 @@ function walkinRenew(id){
 const paidFirstPayments=payments;
 payments=function(){let html=paidFirstPayments();if(can('roster')&&mode==='admin'){
  html=html.replace('Every payment, in the clear.','Walk-in renewals & payments.').replace('A clear view of collections, balances, and payment history.','Renew existing members, complete first registrations, and settle outstanding invoices.');
- html=`<div class="walkin-actions">${btn('Walk-in renewal','walkin-renew','primary','','plus')}${btn('New member registration','register','','','users')}</div>`+html;
+ html=`<div class="walkin-actions">${btn('Walk-in renewal','walkin-renew','primary','','plus')}${btn('Add member','register','','','users')}</div>`+html;
  const pending=(state.registrations||[]).filter(r=>r.status!=='provisioned'||r.email_status!=='sent');
  if(pending.length)html+=`<section class="panel"><div class="panel-header"><div><h2>First registrations & account delivery</h2><p>Payment is preserved when account or email completion needs retry.</p></div></div><div class="table-scroll"><table class="data-table"><thead><tr><th>Member</th><th>Plan / amount</th><th>Status</th><th>Action</th></tr></thead><tbody>${pending.map(r=>`<tr><td>${esc(r.name)}<br>${esc(r.email)}</td><td>${esc(r.plan_name)}<br>${money(r.amount_cents/100)}</td><td>${esc(r.status==='awaiting_payment'?'Awaiting first payment':r.status==='paid'?'Paid · account pending':'Paid · email '+r.email_status)}</td><td>${r.status==='awaiting_payment'?btn('Receive first payment','registration-pay','small',`data-id="${r.id}"`):btn('Complete account / email','registration-finish','small',`data-id="${r.id}"`)}</td></tr>`).join('')}</tbody></table></div></section>`;
  }return html;};
