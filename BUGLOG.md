@@ -264,3 +264,22 @@ Follow-up:
 - Make the administrators' notification list show a blank recipient sensibly, for example "Deleted account".
 - Add a database test that a deleted account leaves no plain email in `ff_notifications`.
 - It needs a migration, so it goes through Gate 1.
+
+## RESET-001: Fresh live database for testing   (status: done)
+Requested: 2026-10-12 by Clark. Where: live (`ivxbrhqqfgmhfpgpauzh`), production workspace. Clark authorised deleting all member data, payment history included, for this one reset only, because it was all test data.
+What changed:
+- **Backup first:** every public `ff_` table and the members' Auth users (id, email and creation time), in `.local/backups/reset-test-data-linked-20261012T095936Z.json` (30.9 KB, gitignored).
+- **PayMongo first:** the six stuck `needs_review` checkouts' sessions were expired at PayMongo and confirmed. `4cbb49ad…` was already paid at PayMongo (₱1,499, GCash test, 10 Oct) and was wiped without being recorded.
+- **Deleted, in one transaction:** 2 member accounts and their Auth users, 3 payments, 8 checkouts, 12 notifications, 9 invoices, 9 cycles, 3 first registrations, and 1 member file.
+- **Kept:** the administrator and staff accounts (both enabled), plans, settings, the staff audit log and the clean-up log.
+- **Consequences:**
+  - The six stuck checkouts and `4cbb49ad…` from FEATURE-003 are gone.
+  - No paid-first registration remains, so the old first-payment paths (FEATURE-004) can now be removed in a later release.
+  - BUG-013's leftover emails went with the reset, but the follow-up still stands.
+- **Tools, for next time:** `scripts/reset-test-data.sql` (a SQL Editor preview and a guarded one-transaction delete) and `npm run reset:test-data` (backup, PayMongo expiry and storage clean-up; `--confirm "DELETE ALL MEMBERS"` or `--dry-run`). See DEPLOYMENT.md → Resetting test data.
+Verification:
+- 0 members and 0 member rows.
+- Admin and staff profiles enabled, with their Auth users.
+- Plans and settings unchanged.
+- The live smoke tests pass (17 of 17).
+- The administrator's `/api/state` reads succeed under RLS, simulated as the administrator in a rolled-back transaction.
