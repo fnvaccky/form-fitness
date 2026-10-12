@@ -54,7 +54,10 @@ Fixed 2026-10-12, with Clark's authorisation (PAYMONGO-WEBHOOK):
 - **Secret:** the new webhook's secret went straight from PayMongo's response into Vercel's Production `PAYMONGO_WEBHOOK_SECRET` (Sensitive), replacing the old value. It was never printed or saved.
 - **Redeploy:** `vercel redeploy` worked this time, giving `dpl_DjpqLj7FCQtfR5i2yGT9VrspVvx1`, READY. `main` is unchanged.
 - **Verified on live:** an unknown event type signed with the new secret gets 200 `{"ok":true,"ignored":true}`. Unsigned and wrong-secret posts get 401. Smoke tests pass, 17 of 17.
-- **Still to prove:** Clark's real GCash test payment, with the tab closed before returning, should be recorded by the webhook alone.
+- **Tab-closed test: passed (2026-10-12).** Clark paid John Garcia's Momentum invoice with GCash (test) and closed the tab before returning.
+  - Vercel's request log shows the checkout created at 14:15:02 UTC and PayMongo's `POST /api/paymongo/webhook` → 200 at 14:16:07. There was no `/api/paymongo/status` call at all.
+  - The payment row (₱1,499, GCash, `reference_key` `PAYMONGO:pay_…`) was created at 14:16:09.706 UTC, the same instant the checkout became `paid`, inside that webhook request. The invoice is paid in full.
+  - So the webhook alone recorded it.
 
 ## FEATURE-001: Staff management in the admin portal   (status: released)
 Requested: 2026-10-10 by the planner (Task 08). Where: Members & plans → Staff, role: admin.
