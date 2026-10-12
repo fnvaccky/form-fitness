@@ -160,11 +160,11 @@ Update 2026-10-11 (Task 09 Part A): all four leftovers are fixed, and the old-ho
 - The user-visible "FORM" strings are gone.
 - The unused Gmail form and its Google link are gone.
 - The phone headline has its space.
-
 Follow-up released 2026-10-12: Clark's `google-site-verification` tag is in `public/index.html` exactly as given (commit `2db00c8`, with a unit test).
 - The push deployment and one redeploy failed with Vercel's intermittent `git_info_fail`, which leaves no build log. The same commit built fine as a Preview at the same minute.
 - A retried redeploy of `2db00c8` gave Production deployment `dpl_ENiwZ8bwsCKj3Q9rdu6GKwz5xuPJ`, READY.
 - The live page carries the tag once, inside `<head>`. Smoke tests pass, 17 of 17.
+
 ## FEATURE-002: Password rule and show-password toggle   (status: released)
 Requested: 2026-10-11 by Clark. Where: every screen that sets a password (Set your password from a setup or reset link, Change password, and the unused registration "Create password" field), plus the sign-in form, role: everyone.
 Why: one clear password rule everywhere, guidance while typing, and a way to check what was typed.
