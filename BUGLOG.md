@@ -309,3 +309,4 @@ Fix (`handleWebhook` in `src/paymongo.js`):
 Test added:
 - `tests/unit.test.js`: a JMAC-style reference; a foreign UUID; another workspace; a bad signature, refused with 401 before any database request; our unbound checkout goes on to bind. With the old 404, the test fails.
 - `tests/paymongo.js`: two foreign signed events get `not_ours`, with payment and checkout counts unchanged; a bad signature stays 401; the old 404 assertion now expects `not_ours`. The early-webhook scenario still settles our unbound checkout.
+Released 2026-10-12: `main` was fast-forwarded to `f9787a1`, and Production deployment `dpl_3iRXwgD8z6SDEZDLvT2vB5V7qSVm` is READY. It queued for about 6 minutes behind the Preview builds. Smoke tests pass, 17 of 17. No migration.
