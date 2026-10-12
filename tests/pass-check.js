@@ -1,0 +1,165 @@
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import {readFile,writeFile,mkdir,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {randomUUID,randomBytes} from 'node:crypto';
+import {chromium} from 'playwright';
+import QRCode from 'qrcode';
+import {handle} from '../src/api.js';
+import {serviceClient,result} from '../src/supabase.js';
+import {today} from '../src/validation.js';
+assert(['localhost','127.0.0.1'].includes(new URL(process.env.SUPABASE_URL).hostname),'Local fixtures only');
+// Task 13 Part 4: the member QR pass end to end, in the browser, without changing how passes or check-ins work.
+// Staff scan by pasted text, QR image and (on a phone) the camera, which Edge's fake camera feeds with a real
+// pass. Every fixture is removed afterwards.
+const env={...process.env,GMAIL_ADDRESS:'',GMAIL_APP_PASSWORD:''};
+const db=serviceClient(env),users=[],passed=[],work=path.join(tmpdir(),'repready-pass-'+randomBytes(4).toString('hex'));
+const pass=label=>{passed.push(label);console.log('PASS: '+label);};
+const root=path.resolve('public');
+let origin;
+const server=http.createServer(async(req,res)=>{
+ if(req.url.startsWith('/api/'))return handle(req,res,{...env,APP_WORKSPACE:'production',APP_ORIGIN:origin});
+ try{const file=path.resolve(root,'.'+new URL(req.url,origin).pathname),target=file===root?path.join(root,'index.html'):file;assert(target.startsWith(root+path.sep));
+  res.setHeader('Content-Type',target.endsWith('.js')?'application/javascript':target.endsWith('.css')?'text/css':target.endsWith('.svg')?'image/svg+xml':'text/html');res.end(await readFile(target));}
+ catch{res.statusCode=404;res.end();}
+});
+await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));origin='http://127.0.0.1:'+server.address().port;
+function client(){
+ let cookies='';
+ const send=async(method,endpoint,body,status)=>{
+  const response=await fetch(origin+'/api'+endpoint,{method,headers:{Origin:origin,'Content-Type':'application/json',...(cookies?{Cookie:cookies}:{})},body:body===undefined?undefined:JSON.stringify(body)});
+  if(response.headers.getSetCookie().length)cookies=response.headers.getSetCookie().map(c=>c.split(';')[0]).join('; ');
+  const data=await response.json().catch(()=>({}));if(status!==undefined)assert.equal(response.status,status,`${method} ${endpoint}: ${data.error||response.status}`);return data;
+ };
+ return {post:(e,b,s=200)=>send('POST',e,b,s),get:(e,s=200)=>send('GET',e,undefined,s)};
+}
+async function account(role,name,plan){
+ const email=`pass-${role}-${randomUUID().slice(0,8)}@example.invalid`,password='Local9!'+randomBytes(24).toString('base64url');
+ const {data,error}=await db.auth.admin.createUser({email,password,email_confirm:true,app_metadata:{ff_workspace:'production',...(role==='member'?{}:{ff_role:role})},
+  user_metadata:{form_fitness:true,name,phone:'09170000090',...(plan?{plan,start:today()}:{})}});
+ assert.ifError(error);users.push(data.user.id);return {id:data.user.id,email,password,name};
+}
+// A raw YUV video (Y4M) of a QR code, for Edge's fake camera. The QR fits inside the scanner's centre scan region.
+async function qrVideo(token,file){
+ const qr=QRCode.create(token,{errorCorrectionLevel:'M'}).modules,n=qr.size,W=640,H=480,scale=Math.floor(280/(n+8)),size=scale*(n+8),ox=(W-size)>>1,oy=(H-size)>>1;
+ const Y=Buffer.alloc(W*H,235),UV=Buffer.alloc(W*H/4,128);
+ for(let r=0;r<n;r++)for(let c=0;c<n;c++)if(qr.data[r*n+c])for(let y=0;y<scale;y++)Y.fill(16,(oy+(r+4)*scale+y)*W+ox+(c+4)*scale,(oy+(r+4)*scale+y)*W+ox+(c+5)*scale);
+ const frame=Buffer.concat([Buffer.from('FRAME\n'),Y,UV,UV]);
+ await writeFile(file,Buffer.concat([Buffer.from(`YUV4MPEG2 W${W} H${H} F10:1 Ip A1:1 C420jpeg\n`),...Array(10).fill(frame)]));
+}
+const browsers=[];
+try{
+ await mkdir('test-results',{recursive:true});await mkdir(work,{recursive:true});
+ const staff=await account('staff','LOCAL TEST Pass Desk');
+ const paid=await account('member','LOCAL TEST Paid Pass','basic'),camera=await account('member','LOCAL TEST Camera Pass','basic');
+ const unpaid=await account('member','LOCAL TEST Unpaid Pass','basic'),disabled=await account('member','LOCAL TEST Disabled Pass','basic');
+ const staffApi=client();await staffApi.post('/login',{email:staff.email,password:staff.password});
+ for(const member of [paid,camera,disabled]){
+  const invoice=result(await db.from('ff_invoices').select('id,amount_cents').eq('member_id',member.id).single());
+  await staffApi.post('/payments',{invoiceId:invoice.id,amount:invoice.amount_cents/100,method:'Cash',verified:true,date:today(),idempotencyKey:randomUUID()});
+ }
+ const checkins=async id=>result(await db.from('ff_checkins').select('id').eq('member_id',id).eq('checkin_date',today())).length;
+ const shot=async(page,name,fullPage=false)=>{await page.evaluate(()=>Promise.all(document.getAnimations().filter(a=>a.effect?.getComputedTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{}))));await page.screenshot({path:`test-results/${name}.png`,fullPage});};
+ const errors=[];
+ async function open(browser,person,viewport={width:1440,height:1000},options={}){
+  const context=await browser.newContext({viewport,...options});const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
+  if(options.clock)await page.clock.install();
+  await page.goto(origin);await page.getByLabel('Email address',{exact:true}).fill(person.email);await page.getByLabel('Password',{exact:true}).fill(person.password);
+  await page.getByRole('button',{name:'Log in',exact:true}).click();await page.waitForFunction(()=>currentUser);return page;
+ }
+ const showPass=async page=>{const got=page.waitForResponse(r=>r.url().endsWith('/api/qr'));await page.getByRole('button',{name:'Show my member QR',exact:true}).click();const r=await got;assert.equal(r.status(),200);return (await r.json()).token;};
+ const openScanner=async page=>{await page.getByRole('button',{name:'Scan member',exact:true}).click();await page.locator('#scanner-status').waitFor();};
+ const pasteToken=async(page,token)=>{await page.locator('.scan-alternatives summary').click();await page.locator('#scan-text').fill(token);await page.getByRole('button',{name:'Verify pass',exact:true}).click();};
+
+ const desktop=await chromium.launch({channel:'msedge',headless:true});browsers.push(desktop);
+ const member=await open(desktop,paid),desk=await open(desktop,staff);
+ const first=await showPass(member);
+ await member.locator('#member-qr-canvas').waitFor();await shot(member,'pass-desktop');
+ await openScanner(desk);
+ await desk.locator('#scanner-status').filter({hasText:'Camera unavailable or permission denied. You can upload a QR image instead.'}).waitFor();
+ await pasteToken(desk,first);
+ await desk.locator('#modal-title').filter({hasText:'Membership verified'}).waitFor();
+ assert.equal(await desk.locator('.scan-member .badge').filter({hasText:'Already recorded'}).count(),0);
+ await desk.locator('#identity-confirmed').check();await desk.getByRole('button',{name:'Confirm check-in',exact:true}).click();
+ await desk.locator('#toast').filter({hasText:'Check-in confirmed'}).waitFor();
+ assert.equal(await checkins(paid.id),1,'one check-in recorded');
+ pass('Paid member: the pass shows; staff paste its text, confirm identity and the check-in is recorded');
+ await openScanner(desk);await pasteToken(desk,first);
+ await desk.locator('#form-error').filter({hasText:'This pass was already used.'}).waitFor();
+ await desk.getByRole('button',{name:'Close scanner',exact:true}).click();
+ const refreshing=member.waitForResponse(r=>r.url().endsWith('/api/qr'));await member.getByRole('button',{name:'Refresh pass',exact:true}).click();
+ const second=(await (await refreshing).json()).token;assert.notEqual(second,first);
+ const image=path.join(work,'second.png');await QRCode.toFile(image,second,{width:420,margin:4});
+ await openScanner(desk);await desk.locator('#scan-file').setInputFiles(image);
+ await desk.locator('#modal-title').filter({hasText:'Membership verified'}).waitFor();
+ await desk.locator('.scan-member .badge').filter({hasText:'Already recorded'}).waitFor();
+ assert.match(await desk.locator('.modal .notice').innerText(),/Checked in today at \d\d:\d\d \(Manila time\)\. Another scan will not add a visit\./);
+ assert.equal(await desk.getByRole('button',{name:'Confirm check-in',exact:true}).isDisabled(),true);
+ await shot(desk,'pass-already-recorded');
+ await desk.keyboard.press('Escape');assert.equal(await checkins(paid.id),1,'still one check-in');
+ pass('The same QR again: "This pass was already used." A fresh QR the same day, scanned from an image: "Already recorded", and Confirm is disabled');
+ const unpaidPage=await open(desktop,unpaid);
+ await unpaidPage.locator('.member-pass-bar').filter({hasText:'Your membership starts after full payment'}).waitFor();
+ assert.equal(await unpaidPage.getByRole('button',{name:'Show my member QR',exact:true}).count(),0);
+ const unpaidApi=client();await unpaidApi.post('/login',{email:unpaid.email,password:unpaid.password});
+ assert.match((await unpaidApi.get('/qr',400)).error,/^Check-in denied/);
+ const disabledApi=client();await disabledApi.post('/login',{email:disabled.email,password:disabled.password});
+ const disabledToken=(await disabledApi.get('/qr')).token;
+ result(await db.from('ff_profiles').update({enabled:false}).eq('id',disabled.id));
+ await openScanner(desk);await pasteToken(desk,disabledToken);
+ await desk.locator('#form-error').filter({hasText:'This membership is inactive.'}).waitFor();
+ assert.equal(await checkins(disabled.id),0);
+ pass('An unpaid member has no pass (none offered, and the server refuses one); a disabled member\'s pass is refused at the scanner');
+
+ // Phone: a camera that sees the camera member's live pass.
+ const cameraApi=client();await cameraApi.post('/login',{email:camera.email,password:camera.password});
+ const video=path.join(work,'pass.y4m');await qrVideo((await cameraApi.get('/qr')).token,video);
+ const phoneBrowser=await chromium.launch({channel:'msedge',headless:true,args:['--use-fake-ui-for-media-stream','--use-fake-device-for-media-stream',`--use-file-for-fake-video-capture=${video}`]});browsers.push(phoneBrowser);
+ const phoneContext=await phoneBrowser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,permissions:['camera']});
+ await phoneContext.addInitScript(()=>{const original=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);window.__cameraRequests=[];navigator.mediaDevices.getUserMedia=c=>{window.__cameraRequests.push(JSON.stringify(c));return original(c);};});
+ const phone=await phoneContext.newPage();phone.on('pageerror',e=>errors.push(e.message));
+ await phone.goto(origin);await phone.getByLabel('Email address',{exact:true}).fill(staff.email);await phone.getByLabel('Password',{exact:true}).fill(staff.password);
+ await phone.getByRole('button',{name:'Log in',exact:true}).click();await phone.waitForFunction(()=>currentUser);
+ await openScanner(phone);
+ await phone.locator('#modal-title').filter({hasText:'Membership verified'}).waitFor({timeout:30000});
+ assert.match(await phone.locator('.scan-member').innerText(),/LOCAL TEST Camera Pass/);
+ const requests=await phone.evaluate(()=>window.__cameraRequests);
+ assert(requests.some(r=>/environment/.test(r)),'the back camera is asked for first: '+requests.join(' | '));
+ await shot(phone,'pass-phone-camera-verified');
+ await phone.locator('#identity-confirmed').check();await phone.getByRole('button',{name:'Confirm check-in',exact:true}).click();
+ await phone.locator('#toast').filter({hasText:'Check-in confirmed'}).waitFor();assert.equal(await checkins(camera.id),1);
+ pass('Phone: the camera asks for the back camera, reads a live pass from the camera feed, and the check-in is recorded');
+
+ // Phone: camera blocked.
+ const blockedBrowser=await chromium.launch({channel:'msedge',headless:true});browsers.push(blockedBrowser);
+ const blocked=await open(blockedBrowser,staff,{width:390,height:844},{isMobile:true,hasTouch:true});
+ await openScanner(blocked);
+ await blocked.locator('#scanner-status').filter({hasText:'Camera unavailable or permission denied. You can upload a QR image instead.'}).waitFor();
+ assert.equal(await blocked.locator('#scan-file').isVisible(),true);assert.equal(await blocked.locator('.scan-alternatives summary').isVisible(),true);
+ await shot(blocked,'pass-phone-camera-blocked');
+ pass('Phone: with the camera blocked, a readable message, and the image upload and pasted-text fallbacks stay visible');
+
+ // The pass screen refreshes itself every 90 seconds while it is open (10 times at most).
+ const passPhone=await open(blockedBrowser,camera,{width:390,height:844},{isMobile:true,hasTouch:true,clock:true});
+ const tokenA=await showPass(passPhone);
+ await passPhone.locator('#qr-countdown').filter({hasText:/Pass expires in (8\d|90) seconds/}).waitFor();
+ const box=await passPhone.locator('#member-qr-canvas').boundingBox();assert(box.width>=240&&box.width<=390,'the QR is large enough on a phone: '+box.width);
+ await shot(passPhone,'pass-phone');
+ let previous=tokenA;
+ for(let i=1;i<=10;i++){
+  const next=passPhone.waitForResponse(r=>r.url().endsWith('/api/qr'));await passPhone.clock.fastForward(91000);
+  const token=(await (await next).json()).token;assert.notEqual(token,previous,`refresh ${i} brings a new pass`);previous=token;
+  await passPhone.locator('#qr-countdown').filter({hasText:/Pass expires in (8\d|90) seconds/}).waitFor();
+  assert.equal(await passPhone.locator('#member-qr-canvas').evaluate(c=>c.style.opacity),'','the fresh QR is fully visible');
+ }
+ await passPhone.clock.fastForward(91000);
+ await passPhone.locator('#qr-countdown').filter({hasText:'Pass expired. Refresh to get a new QR.'}).waitFor();
+ pass('The pass refreshes itself when its 90 seconds run out (counting from when it arrived, so a phone clock that is off doesn\'t matter), and stops after 10 refreshes');
+ assert.deepEqual(errors,[],'no JavaScript errors');
+ console.log(`PASS: ${passed.length} pass checks`);
+}finally{
+ for(const b of browsers)await b.close();server.close();await rm(work,{recursive:true,force:true});
+ for(const id of users){for(const table of ['ff_checkins','ff_notifications','ff_payments','ff_invoices','ff_memberships'])result(await db.from(table).delete().eq('member_id',id));}
+ for(const id of users.reverse()){result(await db.from('ff_profiles').delete().eq('id',id));await db.auth.admin.deleteUser(id);}
+}

@@ -24,6 +24,7 @@
     "test:passwords": "node --env-file-if-exists=.env.local tests/password-fields.js",
     "test:accounts": "node --env-file-if-exists=.env.local tests/accounts.js",
     "test:reset": "node --env-file-if-exists=.env.local tests/reset-test-data.js",
+    "test:pass": "node --env-file-if-exists=.env.local tests/pass-check.js",
     "reset:test-data": "node --env-file-if-exists=.env.local scripts/reset-test-data.js"
   },
   "engines": {
