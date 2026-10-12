@@ -310,3 +310,64 @@ Test added:
 - `tests/unit.test.js`: a JMAC-style reference; a foreign UUID; another workspace; a bad signature, refused with 401 before any database request; our unbound checkout goes on to bind. With the old 404, the test fails.
 - `tests/paymongo.js`: two foreign signed events get `not_ours`, with payment and checkout counts unchanged; a bad signature stays 401; the old 404 assertion now expects `not_ours`. The early-webhook scenario still settles our unbound checkout.
 Released 2026-10-12: `main` was fast-forwarded to `f9787a1`, and Production deployment `dpl_3iRXwgD8z6SDEZDLvT2vB5V7qSVm` is READY. It queued for about 6 minutes behind the Preview builds. Smoke tests pass, 17 of 17. No migration.
+
+## FEATURE-005: Attendance report, My visits and Visits today   (status: built)
+Requested: 2026-10-12 by Clark (Task 13). Where: Members → Attendance and the dashboard (staff, admin); the member's home (member).
+Why: check-ins were recorded, but nobody could see them afterwards. The gym had no attendance report, members had no visit history, and the dashboard had no count for today.
+What changed:
+- **Attendance report:** `GET /api/reports/attendance?from&to&plan` for staff and administrators. Members get 403, and signed-out callers get 401.
+  - It reads through the caller's own session, so RLS keeps it to their workspace.
+  - Dates must be real, From must be on or before To, the range is at most 366 days, and To can't be later than today (Manila). The plan is `all` or one of the workspace's plans; anything else gets 400.
+  - Rows are read 1,000 at a time, up to 10,000, with `truncated` set when there are more.
+  - Each visit has the date, the Manila time, the member, the plan and the staff member who confirmed it. The totals are visits, unique members, days and the daily average to one decimal.
+- **Attendance tab** (Members; staff and administrators):
+  - From and To default to the last 7 days, with a plan filter and Apply.
+  - Three totals cards, then the visits, newest first.
+  - Export CSV, named `RepReady-attendance-<from>-to-<to>.csv`, through the app's `csv()` helper, which also neutralises cells that start with `=`.
+  - An empty state, and a note when the list is truncated.
+  - On phones the Members tab bar now scrolls sideways, because administrators have five tabs.
+- **My visits** (members): "This month: N visits" and the member's own last 30 visits.
+  - `/api/state` carries them, so there is no new endpoint.
+  - The member's check-in query now asks for their own 50 latest by member id.
+- **Visits today** (staff and administrators): a dashboard card, returned as `stats.visitsToday`.
+  - It is an exact count of today's check-ins with no rows fetched (`count: 'exact', head: true`).
+  - It is the only new query on each refresh.
+- **No migration.** The existing check-in indexes cover these reads. Passes and check-ins work as before.
+- **Found while testing:**
+  - The existing browser suite caught the administrator's five Members tabs widening the page at 390 px. The tab bar now scrolls on phones, and the open tab stays in view.
+  - The screenshots showed the report's filters and cards touching the panel border. They now sit inside the panel's padding.
+Test added:
+- `tests/attendance.test.js` (4 tests):
+  - the date and plan rules;
+  - the totals;
+  - Manila times;
+  - paging: 1,000 rows at a time, stopping at 10,000, and `truncated` only when more exist;
+  - the plan filter;
+  - an unknown plan refused before any check-in is read.
+- `tests/attendance.js` (7 groups, `npm run test:attendance`):
+  - 401 signed out, 403 for a member, 200 for staff and administrators;
+  - the plan filter, and 400 for bad ranges and plans;
+  - workspace isolation;
+  - My visits stays correct with 55 newer visits by others;
+  - Visits today, per workspace;
+  - in the browser: the Attendance tab, the CSV file, and the phone layouts, including an administrator's five tabs;
+  - My visits in the browser.
+- Every existing suite still passes:
+  - the unit tests (91);
+  - the four database suites;
+  - the twelve server suites;
+  - the demo integration and browser suites.
+
+## BUG-015: The member pass stopped at "Pass expired" instead of refreshing   (status: fixed)
+Found: 2026-10-12 while checking the QR pass end to end (Task 13, Part 4). Where: the member's QR pass screen.
+What happened:
+- **No refresh:** when the 90-second countdown ended, the QR faded and the screen said "Pass expired. Refresh to get a new QR." It stayed that way until the member tapped Refresh pass, so a member waiting at the desk could be holding a dead QR.
+- **Phone clock:** the countdown measured the pass's expiry against the phone's own clock. If that clock was more than about 90 seconds wrong, a valid pass could show as expired straight away. Or, with the clock behind, the screen counted past the point where the server stops accepting the pass.
+Fix (`memberQR` in `public/connected.js`):
+- **Countdown:** it now runs from when the pass arrived, on the device's own timer, so the phone's clock setting doesn't matter.
+- **Self-refresh:** when the countdown ends, the screen fetches a fresh pass by itself, up to 10 times (about 15 more minutes). After that it shows "Pass expired" and Refresh pass, as before.
+- **No writes:** issuing a pass only signs a token, so each refresh is one read-only call.
+- **Late refreshes are ignored:** a refresh still in flight when the screen closes, or when Refresh pass is tapped, can't draw over the new pass or stop its timer.
+Test added:
+- `tests/pass-check.js` (`npm run test:pass`): with the browser clock fast-forwarded, the pass refreshes itself 10 times and then shows "Pass expired". Without the fix, the test fails at the first refresh.
+- The same suite covers the rest of Part 4. It checks pasted text, image upload and camera scans, the already-used and already-recorded passes, refusing unpaid and disabled members, the back camera, and the blocked-camera fallbacks.
