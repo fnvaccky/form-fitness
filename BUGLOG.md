@@ -232,7 +232,7 @@ Test added: `tests/unit.test.js`:
 BUG-011's refusal test now expects the specific reason. Also checked against the real local Supabase Auth: reusing the current password gives "Choose a password different from your current one." on the link save (422), the retry (400) and Change password (400).
 Mutation checks: hiding refusals again, dropping the same-password or expired-session mapping, ignoring Supabase's length, the retry's missing expired screen, and Change password saying "link" each fail a test.
 
-## FEATURE-004: Account-first registration and unpaid-account clean-up   (status: built — waiting for Clark's "go")
+## FEATURE-004: Account-first registration and unpaid-account clean-up   (status: released)
 Requested: 2026-10-12 by Clark (Task 10). Where: Add member, the member's home, Members → Unpaid accounts; roles: staff, admin, member.
 Why: paid-first registration made a login account only after the first full payment, so a member could not choose a plan or pay online themselves. Accounts that never pay now need a safe, logged way to be removed.
 What changed:
@@ -253,3 +253,13 @@ Test added:
 - A real PayMongo test-mode run locally, all in the browser: Add member, the setup email, choose a plan, Pay now with GCash test, back in the app with the plan active and a member pass.
 - Mutation checks: 24 of 24 are caught (database rules, server gates, the job's secret and switch, and the screens).
 Live steps after "go": push the migration, release, smoke-test. Clark sets `CRON_SECRET` in Vercel. The job stays off until Clark approves the first run's list and sets `ACCOUNT_CLEANUP_ENABLED=true`.
+Released 2026-10-12 after Clark's "go". The migration was pushed (17 versions match; all 289 post-push values match local), `main` was fast-forwarded to `f22dd6e`, and Production deployment `dpl_48J1TaAe8EtfnwchqF13tgG9NvBV` is READY. Smoke tests pass (17 of 17). No live account was created, paid or deleted; live has 0 never-paid accounts. The daily job is registered but inert: the `form-fitness` project has no `CRON_SECRET` yet, so Vercel's call (triggered once with `vercel crons run`) got 401. `ACCOUNT_CLEANUP_ENABLED` is unset.
+
+## BUG-013: A deleted account's sent notifications keep its email address   (status: follow-up)
+Reported: 2026-10-12 by Clark (Task 10 "go"). Where: the notification records of an account removed by Delete unpaid account or the daily clean-up; administrators see them in Settings → Notifications.
+What happens: the delete removes the account's unsent notifications. Its sent ones stay as the delivery record with `member_id` cleared, but their `recipient` still holds the deleted account's plain email address, although the clean-up log keeps only a hash and the email is otherwise free.
+Follow-up:
+- In `ff_private.delete_never_paid`, blank the `recipient` of those sent rows. The column is `text not null` with no format check, so an empty string works.
+- Make the administrators' notification list show a blank recipient sensibly, for example "Deleted account".
+- Add a database test that a deleted account leaves no plain email in `ff_notifications`.
+- It needs a migration, so it goes through Gate 1.
