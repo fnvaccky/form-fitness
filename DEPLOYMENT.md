@@ -220,3 +220,42 @@ Needs migration `20261012090000_account_first.sql`. It replaces paid-first regis
 - **It ships switched off.** Without `CRON_SECRET`, the route answers 401. With `CRON_SECRET` but without `ACCOUNT_CLEANUP_ENABLED=true`, the job only counts the accounts that are due and deletes nothing. Turn it on only after Clark approves the list of accounts the first run would delete.
 
 Verification: `tests/account-cleanup.sql` (database rules) and `npm run test:accounts` (API, mocked PayMongo, the daily job on the demo workspace, and the browser screens).
+
+## Resetting test data
+
+Two tools delete ALL member data in the production workspace, so testing can start again from a clean database. **It can't be undone.**
+
+- **Kept:** administrator and staff profiles and their Auth users, `ff_plans`, `ff_settings`, `ff_staff_audit`, `ff_account_cleanup_log` (append-only), `ff_paymongo_attempts` and the migration history.
+- **Deleted:** every member profile and its Auth user, plus all check-ins, payments, payment submissions, online checkouts, invoices, membership cycles, first registrations and member notifications (including ones already detached from a deleted account).
+
+### In the Supabase SQL Editor: `scripts/reset-test-data.sql`
+
+1. **Run PART 1 alone.** Select it and run it. It only reads: it lists the row counts that would be deleted, the member accounts, the staff and administrator accounts that stay, and any open online checkout.
+2. **Cancel open checkouts first.** Use Payments → Online payments in progress → Cancel checkout. PART 2 refuses while any checkout is creating, pending or needs_review, because a member could still pay on it.
+3. **Run PART 2.** In PART 2, replace `type DELETE ALL MEMBERS here` with `DELETE ALL MEMBERS`, then select PART 2 and run it.
+   - It is one transaction, in foreign-key order. If anything fails, nothing is deleted.
+   - It refuses unless it is clearing the production workspace and an enabled administrator exists. It also refuses if a member appears in the kept staff audit log.
+   - It ends by listing the rows deleted per table.
+4. **Leftover files:** member photo and receipt files stay in the `form-fitness-private` bucket, because SQL can't delete storage objects. Nothing points to them any more, so they're harmless.
+
+### The full version, on the developer's machine: `npm run reset:test-data`
+
+```
+npm run reset:test-data -- --dry-run                         # rehearse: changes nothing
+npm run reset:test-data -- --confirm "DELETE ALL MEMBERS"    # the real reset
+```
+
+- **Requirements:** it uses the Supabase CLI's login and linked project (`supabase link`), and `PAYMONGO_SECRET_KEY` from `.env.local`, which must be a test key.
+- **Server key:** it reads the project's server key from the CLI for the Storage clean-up, and never prints or saves it.
+- **Local stack:** `--local` targets the local stack instead.
+- **The guard:** without `--confirm "DELETE ALL MEMBERS"` typed exactly, it refuses. Keep the `--` so npm passes the options on.
+- **What it does, in order:**
+  1. **Preview:** PART 1.
+  2. **Backup:** every public `ff_` table, plus the members' Auth users (id, email and creation time only), to `.local/backups/reset-test-data-<target>-<time>.json` (gitignored, readable only by the current Windows user). It prints the file's size and row counts, never its contents.
+  3. **PayMongo, test mode only:** every open checkout's session is read. It must be in test mode, and its `reference_number` must be the checkout id. A paid one is listed and not recorded. An active one is expired and read again to confirm. Anything uncertain stops the run before anything is deleted.
+  4. **Delete:** PART 2 of the same SQL file, with the confirmation and the checkouts it just closed filled in, in one transaction.
+  5. **Storage:** after the commit, it removes the members' files: their own folders, and photo or receipt paths their rows pointed to. It never touches `production/payments/` (the payment QR images) or a kept account's photo.
+  6. **Verify:** 0 members and 0 member rows. Plans, settings, the kept logs and every staff and administrator account are unchanged, and an enabled administrator remains.
+- **Dry run:** `--dry-run` runs every step, but only reads PayMongo, leaves storage alone and rolls the delete back.
+
+Tests: `npm test` (the script's guards, the PayMongo step against a mocked PayMongo, the storage filter) and `npm run test:reset` (both SQL parts against the local stack, every refusal and a full delete, all rolled back, plus a local dry run).

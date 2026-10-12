@@ -9,7 +9,7 @@
     "dev": "node --watch --env-file-if-exists=.env.local src/dev.js",
     "check": "node scripts/check.js",
     "build": "node build.cjs",
-    "test": "node --test tests/unit.test.js tests/paymongo-unit.test.js",
+    "test": "node --test tests/unit.test.js tests/paymongo-unit.test.js tests/reset-test-data.test.js",
     "test:integration": "node --env-file-if-exists=.env.local tests/integration.js",
     "test:browser": "node --env-file-if-exists=.env.local tests/browser.js",
     "seed:demo": "node --env-file-if-exists=.env.local scripts/seed-demo.js",
@@ -22,7 +22,9 @@
     "test:emails": "node --env-file-if-exists=.env.local tests/email-uniqueness.js",
     "test:links": "node --env-file-if-exists=.env.local tests/auth-links.js",
     "test:passwords": "node --env-file-if-exists=.env.local tests/password-fields.js",
-    "test:accounts": "node --env-file-if-exists=.env.local tests/accounts.js"
+    "test:accounts": "node --env-file-if-exists=.env.local tests/accounts.js",
+    "test:reset": "node --env-file-if-exists=.env.local tests/reset-test-data.js",
+    "reset:test-data": "node --env-file-if-exists=.env.local scripts/reset-test-data.js"
   },
   "engines": {
     "node": ">=22"
