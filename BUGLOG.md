@@ -231,3 +231,25 @@ Test added: `tests/unit.test.js`:
 - "the set-password screen shows an expired link, with Forgot password, after the link or its retry".
 BUG-011's refusal test now expects the specific reason. Also checked against the real local Supabase Auth: reusing the current password gives "Choose a password different from your current one." on the link save (422), the retry (400) and Change password (400).
 Mutation checks: hiding refusals again, dropping the same-password or expired-session mapping, ignoring Supabase's length, the retry's missing expired screen, and Change password saying "link" each fail a test.
+
+## FEATURE-004: Account-first registration and unpaid-account clean-up   (status: built — waiting for Clark's "go")
+Requested: 2026-10-12 by Clark (Task 10). Where: Add member, the member's home, Members → Unpaid accounts; roles: staff, admin, member.
+Why: paid-first registration made a login account only after the first full payment, so a member could not choose a plan or pay online themselves. Accounts that never pay now need a safe, logged way to be removed.
+What changed:
+- **Add member** creates the account at once (Auth admin API, role member, random password, the same setup email staff get), after `ff_member_admin` checks the role and the one-email rule in the database. A plan at the desk is optional and becomes an unpaid invoice through the renew path. Public sign-up stays off.
+- **Limited home:** a member with no plan chooses one; an unpaid member gets Pay now (PayMongo) or pays cash at the desk, with no member pass. The database already refused a pass, scan or check-in without a fully paid cycle covering today; now tested, including a validly signed pass.
+- **Activation:** online only from PayMongo's verified signal; cash when staff record it.
+- **Clean-up, in the database** (migration `20261012090000_account_first.sql`): only never-paid member accounts can be deleted (42501 otherwise). Payments, paid invoices, check-ins and the staff audit log are never deleted, and their presence refuses the delete. Closed checkouts stay as detached history. Every delete writes an append-only `ff_account_cleanup_log` row with an email hash.
+- **PayMongo first:** open checkouts are checked with the Cancel checkout logic. A late payment is settled and the delete refused; an unpaid session is expired first.
+- **By hand:** administrators get Members → Unpaid accounts with each account's age and Delete unpaid account, behind the confirmation text. Staff get neither.
+- **Daily job:** Vercel Cron, `GET /api/cron/account-cleanup` with `CRON_SECRET`, deletes never-paid accounts older than 7 days. It ships switched off (`ACCOUNT_CLEANUP_ENABLED` unset).
+- **Older registrations** still finish through the first-payment paths; Add member no longer creates them.
+- **Fix found by the tests:** when two Add member requests race for one email, the loser now gets 409 "An account already uses this email." instead of a 502.
+Test added:
+- `tests/account-cleanup.sql` (57 checks): account creation with and without a plan; no pass, scan or check-in while unpaid; cash activates; staff can create accounts but can't list, delete or force a clean-up; every refusal and its message, including one artificial account per never-deleted record; malformed PayMongo confirmations; open checkouts; detached history; notifications; the log row; the email re-registers; the 7-day rule; grants; the append-only log.
+- `tests/accounts.js` (15 groups, `npm run test:accounts`): no-plan creation; no pass while unpaid; plan + cash and plan + mocked PayMongo activate (a forged webhook changes nothing); staff refused; admin delete and the log row; the email re-registers; paid-then-expired, staff and admin accounts can't be deleted; an open checkout that turns out paid is settled and refused; an unpaid one is expired then deleted; an older registration still finishes; the daily job switched off and on; the unpaid member home and the Unpaid accounts tab in the browser.
+- `tests/unit.test.js` (4 new): Add member through the Auth admin API with no plan; a desk plan becomes an unpaid invoice; the race message; admin-only delete and the job's secret and switch.
+- Rewritten for account first: `tests/onboarding.js`, `tests/email-uniqueness.js`, `tests/auth.js`. `tests/registration-resilience.js` and the first-payment scenarios in `tests/paymongo.js` now use registrations made the old way (`tests/legacy-registration.js`).
+- A real PayMongo test-mode run locally, all in the browser: Add member, the setup email, choose a plan, Pay now with GCash test, back in the app with the plan active and a member pass.
+- Mutation checks: 24 of 24 are caught (database rules, server gates, the job's secret and switch, and the screens).
+Live steps after "go": push the migration, release, smoke-test. Clark sets `CRON_SECRET` in Vercel. The job stays off until Clark approves the first run's list and sets `ACCOUNT_CLEANUP_ENABLED=true`.
