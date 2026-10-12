@@ -161,7 +161,7 @@ try{
  }
  Object.assign(testSession,structuredClone(original));
  assert.equal((await webhook(testSession,{livemode:true})).status,409);
- const unknown=structuredClone(original);unknown.id='cs_Unknown';unknown.attributes.reference_number=randomUUID();assert.equal((await webhook(unknown)).status,404);
+ const unknown=structuredClone(original);unknown.id='cs_Unknown';unknown.attributes.reference_number=randomUUID();const notOurs=await webhook(unknown);assert.equal(notOurs.status,200);assert.deepEqual(await notOurs.json(),{ok:true,ignored:'not_ours'},'BUG-014: unknown session and reference are not ours');
  const unknownSession=structuredClone(original);unknownSession.id='cs_Unknown';assert.equal((await webhook(unknownSession)).status,409,'Known reference cannot be rebound to another session');
  assert.equal((await webhook(testSession,{eventType:'payment.failed'})).status,200);
  testSession.attributes.payments[0].id=row.payment_id||'pay_'+row.session_id.slice(3);
@@ -185,6 +185,15 @@ try{
  assert.equal(result(await db.from('ff_memberships').select('id').eq('member_id',earlyReg.member_id)).length,1);
  assert.equal(result(await db.from('ff_payments').select('id').eq('member_id',earlyReg.member_id)).length,1);
  console.log('PASS: early webhook binds the durable reference safely; account/cycle/invoice/payment provision once');
+ // BUG-014: the PayMongo account is shared, so another business's paid checkouts arrive too, correctly signed.
+ const countsBefore=JSON.stringify([result(await db.from('ff_payments').select('id')).length,result(await db.from('ff_checkouts').select('id')).length]);
+ const foreign=(id,reference)=>({id,type:'checkout_session',attributes:{reference_number:reference,livemode:false,status:'active',payments:[{id:'pay_'+id.slice(3),attributes:{status:'paid',amount:149900,currency:'PHP',livemode:false,source:{type:'gcash'}}}]}});
+ for(const session of [foreign('cs_Jmac'+randomBytes(4).toString('hex'),'JMAC-2026-0001'),foreign('cs_Jmac'+randomBytes(4).toString('hex'),randomUUID())]){
+  const response=await webhook(session);assert.equal(response.status,200);assert.deepEqual(await response.json(),{ok:true,ignored:'not_ours'});
+ }
+ assert.equal(JSON.stringify([result(await db.from('ff_payments').select('id')).length,result(await db.from('ff_checkouts').select('id')).length]),countsBefore,'nothing recorded for checkouts that are not ours');
+ assert.equal((await webhook(foreign('cs_JmacBad','JMAC-2026-0002'),{bad:true})).status,401,'bad signatures stay 401');
+ console.log('PASS: BUG-014 another business\'s signed paid events get 200 not_ours and record nothing; bad signatures stay 401');
  // Reproduce the old unbound create-response mismatch, using the saved provider ID only.
  const oldCreate=await legacyRegistration(staff,{requestId:randomUUID(),name:'LOCAL TEST Old create recovery',email:'paymongo-recovery-'+randomUUID()+'@example.invalid',phone:'09170000004',plan:'basic',start:today()});extraRegistrations.push(oldCreate.registration.id);
  providerFailure=true;try{await call('/paymongo/checkout',{kind:'registration',registrationId:oldCreate.registration.id,emailConfirmed:true,method:'gcash',requestId:randomUUID()},502);}finally{providerFailure=false;}

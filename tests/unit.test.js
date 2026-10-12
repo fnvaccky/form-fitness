@@ -486,7 +486,7 @@ function fakeSupabase(state){
     const url=new URL(req.url,'http://localhost');
     state.requests.push({method:req.method,path:url.pathname,body:raw?JSON.parse(raw):null});
     res.setHeader('Content-Type','application/json');
-    if(state.routes?.[url.pathname])return state.routes[url.pathname]({method:req.method,body:raw?JSON.parse(raw):null},res);
+    if(state.routes?.[url.pathname])return state.routes[url.pathname]({method:req.method,body:raw?JSON.parse(raw):null,query:url.searchParams},res);
     if(url.pathname==='/auth/v1/token')return res.end(JSON.stringify(state.session));
     if(url.pathname==='/auth/v1/user')return res.end(JSON.stringify(state.session.user));
     if(url.pathname==='/auth/v1/logout'){res.statusCode=204;return res.end();}
@@ -671,6 +671,34 @@ test('a plan chosen at the desk becomes an unpaid invoice through the renew path
   assert.equal(response.status,201,value.error);assert.equal(value.invoiceId,'99999999-0000-0000-0000-000000000011');
   assert.deepEqual(staff.state.requests.find(r=>r.path==='/rest/v1/rpc/ff_command').body,{action:'renew',body:{memberId,plan:'basic',start}});
  }finally{staff.close();}
+});
+test('BUG-014: a verified paid event for a checkout that is not ours gets 200 not_ours and records nothing; ours never does',async()=>{
+ const {createHmac,randomBytes}=await import('node:crypto');
+ const secret=randomBytes(32).toString('hex');
+ const ours={id:'99999999-0000-4000-8000-0000000000a1',workspace:'production',livemode:false,session_id:null,status:'creating',amount_cents:89900,methods:['gcash'],invoice_id:'99999999-0000-4000-8000-0000000000b1'};
+ const demo={id:'99999999-0000-4000-8000-0000000000a2',workspace:'demo',livemode:false,session_id:'cs_DemoOne',status:'pending',amount_cents:89900,methods:['gcash']};
+ const eq=(query,key)=>query.get(key)?.replace(/^eq\./,'');
+ const t=await consoleSession('admin',{env:{PAYMONGO_SECRET_KEY:'sk_test_unitstub',PAYMONGO_WEBHOOK_SECRET:secret,PAYMONGO_ALLOW_LIVE:'false'},routes:{
+  '/rest/v1/ff_checkouts':(req,res)=>res.end(JSON.stringify([ours,demo].filter(r=>[['session_id'],['id'],['workspace']].every(([k])=>eq(req.query,k)===undefined||String(r[k])===eq(req.query,k))))),
+  '/rest/v1/rpc/ff_paymongo_bind':(req,res)=>{res.statusCode=500;res.end(JSON.stringify({message:'stop after bind'}));}}});
+ try{
+  const send=(session,signWith=secret)=>{
+   const raw=JSON.stringify({data:{id:'evt_unit',attributes:{type:'checkout_session.payment.paid',livemode:false,data:session}}}),ts=Math.floor(Date.now()/1000);
+   return fetch(t.origin+'/api/paymongo/webhook',{method:'POST',headers:{'Content-Type':'application/json','Paymongo-Signature':`t=${ts},te=${createHmac('sha256',signWith).update(ts+'.').update(raw).digest('hex')},li=`},body:raw});
+  };
+  const paid=(id,reference)=>({id,type:'checkout_session',attributes:{reference_number:reference,livemode:false,status:'active',payments:[{id:'pay_Unit014',attributes:{status:'paid',amount:89900,currency:'PHP',livemode:false,source:{type:'gcash'}}}]}});
+  for(const [label,session,ignored] of [['another business, its own reference format',paid('cs_JmacOne','JMAC-2026-0001'),'not_ours'],['a UUID reference that is not a RepReady checkout',paid('cs_JmacTwo','11111111-0000-4000-8000-000000000000'),'not_ours'],
+    ['a RepReady checkout of another workspace',paid('cs_DemoOne','x'),'other_workspace']]){
+   const response=await send(session);assert.equal(response.status,200,label);assert.deepEqual(await response.json(),{ok:true,ignored},label);
+  }
+  assert(!t.state.requests.some(r=>r.path.startsWith('/rest/v1/rpc/')),'nothing is recorded for an event that is not ours');
+  const before=t.state.requests.length;
+  assert.equal((await send(paid('cs_JmacOne','JMAC-2026-0001'),'not-the-secret')).status,401,'a bad signature is still 401');
+  assert.equal(t.state.requests.length,before,'refused before any database request');
+  const early=await send(paid('cs_BeforeBind',ours.id));
+  assert.equal(early.status,502,'our unbound checkout goes on to bind (the fake stops it there)');
+  assert(t.state.requests.some(r=>r.path==='/rest/v1/rpc/ff_paymongo_bind'&&r.body.body.id===ours.id&&r.body.body.sessionId==='cs_BeforeBind'),'a RepReady checkout is never "not ours", even before its session is bound');
+ }finally{t.close();}
 });
 test('a simultaneous Add member for the same email gets the duplicate message, not a server error',async()=>{
  // The loser of the race fails inside the Auth trigger, which GoTrue reports only as a database error.

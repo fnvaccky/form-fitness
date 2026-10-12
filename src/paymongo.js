@@ -246,10 +246,18 @@ export async function handleWebhook(req,res,env,origin){
  const session=event.data;
  if(!SESSION_ID.test(session?.id||''))fail('Invalid checkout event.');
  testResource(session.attributes);
- const db=serviceClient(env);
- let row=result(await db.from('ff_checkouts').select('*').eq('session_id',session.id).eq('workspace',env.APP_WORKSPACE||'production').maybeSingle());
- if(!row&&UUID.test(session.attributes.reference_number||''))row=result(await db.from('ff_checkouts').select('*').eq('id',session.attributes.reference_number).eq('workspace',env.APP_WORKSPACE||'production').maybeSingle());
- if(!row)fail('Unknown PayMongo checkout. No payment was recorded.',404);
+ const db=serviceClient(env),workspace=env.APP_WORKSPACE||'production',reference=session.attributes.reference_number;
+ // Ours: bound to this session, or (when the event beats the bind) the checkout whose id is the reference number.
+ let row=result(await db.from('ff_checkouts').select('*').eq('session_id',session.id).eq('workspace',workspace).maybeSingle());
+ if(!row&&UUID.test(reference||''))row=result(await db.from('ff_checkouts').select('*').eq('id',reference).eq('workspace',workspace).maybeSingle());
+ if(!row){
+  // BUG-014: the PayMongo account is shared with another business, and its paid checkouts reach this webhook
+  // too, correctly signed. Acknowledge them so PayMongo stops retrying, and record nothing. A RepReady checkout
+  // of another workspace is never "not ours": it is left for that workspace's deployment.
+  const elsewhere=result(await db.from('ff_checkouts').select('id').eq('session_id',session.id).maybeSingle())
+   ||(UUID.test(reference||'')?result(await db.from('ff_checkouts').select('id').eq('id',reference).maybeSingle()):null);
+  res.statusCode=200;return res.end(JSON.stringify({ok:true,ignored:elsewhere?'other_workspace':'not_ours'}));
+ }
  testCheckout(row,env);
  let verifiedSession=session;
  try{
