@@ -42,12 +42,19 @@ Fix: code already fixed (`adaab3f`, live). Each leftover row needs an administra
 Update 2026-10-11: FEATURE-003 adds Cancel checkout for exactly this. Once it is released, Clark closes these six from the admin screen (Payments → Online payments in progress → Cancel checkout); Claude does not.
 Test added: none new. `npm run test:paymongo` already covers "minimal V2 create without reference binds pending" and "saved-ID recovery strictly verifies GET". In Task 06, a real test-mode checkout created locally with the released code stayed cleanly `pending` after PayMongo's real GET, and a real GCash test payment settled as `paid`.
 
-## BUG-006: No PayMongo webhook points at the live site   (status: noticed)
+## BUG-006: No PayMongo webhook points at the live site   (status: fixed — config)
 Noticed: 2026-10-10 by Claude, during Task 06's read-only checks. Not reported by Clark.
 What happened: Nothing visible yet. A paid checkout is confirmed when the payer returns to the app while signed in, or when staff use Check payment status, but never on its own. A customer who pays on their own phone, or closes the tab before returning, stays `pending` until someone checks.
 Root cause: configuration. The PayMongo account Production uses (the same account as the local test key, which can read the live checkout sessions) has one test webhook, created 31 August for a Supabase Edge Function on another project (`joffopwzqmlqpsrbivfq.supabase.co/functions/v1/paymongo-webhook`). None points at `https://repready-gym.vercel.app/api/paymongo/webhook`. Webhooks apply account-wide, so that other function also receives RepReady's payment events.
 Fix: config change for whoever manages the PayMongo account. In the PayMongo dashboard, in test mode, add a webhook with the URL `https://repready-gym.vercel.app/api/paymongo/webhook` (the alias; per-deployment URLs require a Vercel login) and the event `checkout_session.payment.paid`. Put its secret key in Vercel's `PAYMONGO_WEBHOOK_SECRET` for Production (Sensitive), then redeploy Production so the new value is used. Disabling the old webhook is the owner's decision. Nothing was changed by Claude.
 Test added: none. After the change, Claude can confirm it without writing anything: an event of an unknown type, signed with the new webhook's secret, should get 200 "ignored" from live (it returns before any database access), and a wrong secret gets 401.
+Fixed 2026-10-12, with Clark's authorisation (PAYMONGO-WEBHOOK):
+- **Key check:** the local test key is Production's PayMongo account. It read all 8 of Production's checkout sessions, each with our checkout id as `reference_number`, in test mode.
+- **Webhook created:** test webhook `hook_g8r4iDzs3qYBDxt4NcBvx4z8`, for `https://repready-gym.vercel.app/api/paymongo/webhook` and `checkout_session.payment.paid`. The old webhook `hook_TWxEtwmnY4yNKcpPMMUyL4jo` (the other project's Supabase function) is unchanged.
+- **Secret:** the new webhook's secret went straight from PayMongo's response into Vercel's Production `PAYMONGO_WEBHOOK_SECRET` (Sensitive), replacing the old value. It was never printed or saved.
+- **Redeploy:** `vercel redeploy` worked this time, giving `dpl_DjpqLj7FCQtfR5i2yGT9VrspVvx1`, READY. `main` is unchanged.
+- **Verified on live:** an unknown event type signed with the new secret gets 200 `{"ok":true,"ignored":true}`. Unsigned and wrong-secret posts get 401. Smoke tests pass, 17 of 17.
+- **Still to prove:** Clark's real GCash test payment, with the tab closed before returning, should be recorded by the webhook alone.
 
 ## FEATURE-001: Staff management in the admin portal   (status: released)
 Requested: 2026-10-10 by the planner (Task 08). Where: Members & plans → Staff, role: admin.
