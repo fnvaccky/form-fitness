@@ -7,10 +7,10 @@ import {chromium} from 'playwright';
 import {handle} from '../src/api.js';
 import {serviceClient,result} from '../src/supabase.js';
 import {today} from '../src/validation.js';
-import {manilaTime} from '../src/attendance.js';
+import {manilaTime,manilaClock} from '../src/attendance.js';
 assert(['localhost','127.0.0.1'].includes(new URL(process.env.SUPABASE_URL).hostname),'Local fixtures only');
 // Task 13, end to end on the local stack: the attendance report (API and screen), CSV export, a member's own
-// visit history beyond the global 50, and "Visits today". Every fixture is removed afterwards.
+// visit history beyond the global 50, "Visits today", and (13A) the pass screen's check-in status. Every fixture is removed afterwards.
 const env={...process.env,GMAIL_ADDRESS:'',GMAIL_APP_PASSWORD:''};
 const db=serviceClient(env),users=[],passed=[];
 const pass=label=>{passed.push(label);console.log('PASS: '+label);};
@@ -101,11 +101,24 @@ try{
  const memberState=await memberApi.get('/state'),staffState=await staffApi.get('/state');
  assert(!staffState.checkins.some(c=>c.memberId===history.id),'the global latest 50 hold none of this member\'s visits');
  const own=[...historyRows].sort((a,b)=>b.created_at.localeCompare(a.created_at));
- assert.deepEqual(memberState.visits.recent,own.slice(0,30).map(r=>({date:r.checkin_date,time:manilaTime(r.created_at)})),'their own last 30, newest first');
+ assert.deepEqual(memberState.visits.recent,own.slice(0,30).map(r=>({date:r.checkin_date,time:manilaClock(r.created_at)})),'their own last 30, newest first, on the 12-hour clock');
+ assert.deepEqual(memberState.visits.last,{date:own[0].checkin_date,time:manilaClock(own[0].created_at)},'the last visit');
  assert.equal(memberState.visits.thisMonth,historyRows.filter(r=>r.checkin_date.startsWith(today().slice(0,7))).length);
  assert(memberState.checkins.every(c=>c.memberId===history.id),'a member only ever reads their own check-ins');
  assert.equal(memberState.stats,undefined);
- pass('My visits: the member\'s own last 30 visits and this month\'s count, correct beyond the global 50, and nobody else\'s');
+ pass('My visits: the member\'s own last 30 visits, the last visit and this month\'s count, correct beyond the global 50, and nobody else\'s');
+
+ // 13A: the pass screen asks whether the caller has checked in today. Only their own row counts.
+ const visitor=others[1],visitorApi=client(prod.origin);await visitorApi.post('/login',{email:visitor.email,password:visitor.password});
+ const visitorToday=otherRows.find(r=>r.member_id===visitor.id&&r.checkin_date===day(0));
+ const seen=await visitorApi.get('/checkin-status');
+ assert.deepEqual({...seen,at:new Date(seen.at).toISOString()},{checkedIn:true,date:day(0),time:manilaClock(visitorToday.created_at),at:new Date(visitorToday.created_at).toISOString(),plan:'plus'});
+ assert.deepEqual(await memberApi.get('/checkin-status'),{checkedIn:false,date:day(0)},'eleven other members visited today, but not this one');
+ const demoVisitorApi=client(demo.origin);await demoVisitorApi.post('/login',{email:demoMember.email,password:demoMember.password});
+ assert.deepEqual(await demoVisitorApi.get('/checkin-status'),{checkedIn:false,date:day(0)},'the demo member\'s older visits don\'t count as today');
+ assert.equal((await staffApi.get('/checkin-status',403)).error,'Sign in as a member.');
+ assert.equal((await fetch(prod.origin+'/api/checkin-status')).status,401,'signed out');
+ pass('Check-in status: a member sees only their own check-in today (time, date and plan); staff get 403 and signed-out callers 401');
 
  const todayCount=result(await db.from('ff_checkins').select('id').eq('workspace','production').eq('checkin_date',today())).length;
  assert.equal(staffState.stats.visitsToday,todayCount);assert.equal((await adminApi.get('/state')).stats.visitsToday,todayCount);
@@ -167,11 +180,13 @@ try{
  const me=await signIn(history);
  const panel=me.locator('.my-visits');await panel.waitFor();
  assert.match(await panel.innerText(),new RegExp(`This month: ${memberState.visits.thisMonth} visits?`));
+ assert.match(await panel.innerText(),new RegExp(`Last visit: [^\\n]*${memberState.visits.last.time}`),'the last visit, with its time');
+ assert.match(await panel.locator('tbody tr').first().innerText(),/\d{1,2}:\d\d [AP]M/,'12-hour times');
  assert.equal(await panel.locator('tbody tr').count(),30);
  await shot(me,'attendance-my-visits');
  assert.equal(await me.locator('[data-tab="attendance"]').count(),0);
  assert.deepEqual(errors,[],'no JavaScript errors');
- pass('Browser: My visits shows this month\'s count and the member\'s last 30 visits; members get no Attendance tab');
+ pass('Browser: My visits shows this month\'s count, the last visit and the member\'s last 30 visits; members get no Attendance tab');
  console.log(`PASS: ${passed.length} attendance checks`);
 }finally{
  if(browser)await browser.close();prod?.server.close();demo?.server.close();

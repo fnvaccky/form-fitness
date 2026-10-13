@@ -1,7 +1,7 @@
 import { allRows, result } from './supabase.js';
 import { today } from './validation.js';
 import {paymongoConfiguration} from './paymongo-config.js';
-import {manilaTime} from './attendance.js';
+import {manilaClock} from './attendance.js';
 export const BUCKET = 'form-fitness-private';
 const datePH = value => new Date(new Date(value).getTime() + 8 * 3600000).toISOString().slice(0,10);
 export const paymentView = p => ({ id:p.id, invoiceId:p.invoice_id, memberId:p.member_id, amount:p.amount_cents/100, amountCents:p.amount_cents, method:p.method, reference:p.reference, date:p.payment_date });
@@ -51,7 +51,7 @@ export async function stateFor(client, profile, env) {
   return {
     user:userView(profile),date:current,members,staff:staffFor(profile,profiles),unpaidAccounts,stats:gymStaff?{visitsToday}:undefined,
     // Task 13: My visits. One check-in a day at most, so this month's visits are always within the latest 50.
-    visits:profile.role==='member'?{recent:checkins.slice(0,30).map(c=>({date:c.checkin_date,time:manilaTime(c.created_at)})),thisMonth:checkins.filter(c=>String(c.checkin_date).startsWith(current.slice(0,7))).length}:undefined,registrations,checkouts,paymongo:paymongoConfiguration(env),plans:plans.map(planView),
+    visits:profile.role==='member'?{recent:checkins.slice(0,30).map(c=>({date:c.checkin_date,time:manilaClock(c.created_at)})),last:checkins[0]?{date:checkins[0].checkin_date,time:manilaClock(checkins[0].created_at)}:null,thisMonth:checkins.filter(c=>String(c.checkin_date).startsWith(current.slice(0,7))).length}:undefined,registrations,checkouts,paymongo:paymongoConfiguration(env),plans:plans.map(planView),
     invoices:invoices.map(i=>{const c=cycles.find(c=>c.id===i.membership_id);return {id:i.id,memberId:i.member_id,plan:c.plan_id,amount:i.amount_cents/100,amountCents:i.amount_cents,paidCents:i.paid_cents,start:c.start_date,end:c.end_date,due:c.start_date,created:datePH(i.created_at)};}),
     memberships:cycles,payments:payments.map(paymentView),
     submissions:await Promise.all(submissions.map(async s=>({id:s.id,invoiceId:s.invoice_id,memberId:s.member_id,amount:s.amount_cents/100,method:s.method,reference:s.reference,status:s.status,receipt:await signedImage(client,s.receipt),date:datePH(s.created_at)}))),

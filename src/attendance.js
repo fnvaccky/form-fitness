@@ -5,6 +5,13 @@ import {result} from './supabase.js';
 const DATE=/^\d{4}-\d{2}-\d{2}$/,PAGE=1000,CAP=10000;
 const dayNumber=value=>Date.UTC(+value.slice(0,4),+value.slice(5,7)-1,+value.slice(8,10))/86400000;
 export const manilaTime=iso=>new Date(iso).toLocaleTimeString('en-GB',{timeZone:'Asia/Manila',hour:'2-digit',minute:'2-digit'});
+// 13A: what members see uses the 12-hour clock ("10:15 AM"). Newer ICU puts a narrow no-break space before AM/PM.
+export const manilaClock=iso=>new Date(iso).toLocaleTimeString('en-US',{timeZone:'Asia/Manila',hour:'numeric',minute:'2-digit'}).replace(/\s/g,' ');
+// 13A: the caller's own check-in today, for the member's pass screen (api.js lets only members ask; RLS agrees).
+export async function checkinStatus(client,profile,today){
+ const row=result(await client.from('ff_checkins').select('checkin_date,created_at,membership:ff_memberships(plan_id)').eq('member_id',profile.id).eq('checkin_date',today).maybeSingle());
+ return row?{checkedIn:true,date:row.checkin_date,time:manilaClock(row.created_at),at:row.created_at,plan:row.membership?.plan_id||''}:{checkedIn:false,date:today};
+}
 function realDate(value,label){
  if(typeof value!=='string'||!DATE.test(value))fail(`${label} must be a date (YYYY-MM-DD).`);
  const day=dayNumber(value);

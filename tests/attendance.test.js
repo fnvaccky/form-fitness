@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {attendanceRange,attendanceTotals,manilaTime} from '../src/attendance.js';
+import {attendanceRange,attendanceTotals,manilaTime,manilaClock,checkinStatus} from '../src/attendance.js';
 // Task 13: the attendance report's date rules and totals.
 const today='2026-10-12';
 
@@ -29,6 +29,24 @@ test('attendance totals: visits, unique members, days and the daily average to o
 test('visit times are shown in Manila time',()=>{
  assert.equal(manilaTime('2026-10-12T16:30:00Z'),'00:30');
  assert.equal(manilaTime('2026-10-12T01:05:00.123+00:00'),'09:05');
+});
+
+// Task 13A: what members see uses the 12-hour clock ("10:15 AM"), with a plain space before AM/PM.
+test('member-facing visit times use the 12-hour clock in Manila time',()=>{
+ assert.equal(manilaClock('2026-10-13T02:15:00Z'),'10:15 AM');
+ assert.equal(manilaClock('2026-10-12T16:05:19.367+00:00'),'12:05 AM');
+ assert.equal(manilaClock('2026-10-13T06:30:00Z'),'2:30 PM');
+});
+
+test('check-in status reads only the caller\'s own check-in for today',async()=>{
+ const reads=[];
+ const fake=row=>({from(table){const q={table,filters:[],select(columns){this.columns=columns;return this;},eq(k,v){this.filters.push([k,v]);return this;},
+  maybeSingle(){reads.push(this);return Promise.resolve({data:row,error:null});}};return q;}});
+ const visited=await checkinStatus(fake({checkin_date:'2026-10-13',created_at:'2026-10-13T02:15:00Z',membership:{plan_id:'plus'}}),{id:'member-1'},'2026-10-13');
+ assert.deepEqual(visited,{checkedIn:true,date:'2026-10-13',time:'10:15 AM',at:'2026-10-13T02:15:00Z',plan:'plus'});
+ assert.equal(reads[0].table,'ff_checkins');
+ assert.deepEqual(reads[0].filters,[['member_id','member-1'],['checkin_date','2026-10-13']],'the caller\'s own row, today only');
+ assert.deepEqual(await checkinStatus(fake(null),{id:'member-1'},'2026-10-13'),{checkedIn:false,date:'2026-10-13'});
 });
 
 // A stand-in for the Supabase query builder: pages come from an in-memory list, and every range() is recorded.

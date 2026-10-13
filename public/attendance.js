@@ -64,12 +64,12 @@ overview=function(){
   +stat('Visits today',state.stats.visitsToday,'<span>Staff-confirmed check-ins today</span>','clock')+html.slice(close);
 };
 
-// The member's own visits: the last 30 and this month's count.
+// The member's own visits: this month's count, the last visit and the last 30 (13A adds the last visit).
 const attendanceBaseMemberOverview=memberOverview;
 memberOverview=function(){
  const html=attendanceBaseMemberOverview(),v=state.visits;
  if(currentUser?.role!=='member'||!v)return html;
- return html+`<section class="panel my-visits" aria-label="My visits"><div class="panel-header"><div><h2>My visits</h2><p>This month: ${v.thisMonth} visit${v.thisMonth===1?'':'s'}</p></div></div>${v.recent.length
+ return html+`<section class="panel my-visits" aria-label="My visits"><div class="panel-header"><div><h2>My visits</h2><p>This month: ${v.thisMonth} visit${v.thisMonth===1?'':'s'}${v.last?` · Last visit: ${date(v.last.date)}, ${esc(v.last.time)}`:''}</p></div></div>${v.recent.length
   ?`<div class="table-scroll"><table class="data-table"><thead><tr><th>Date</th><th>Time (Manila)</th></tr></thead><tbody>${v.recent.map(x=>`<tr><td>${date(x.date)}</td><td>${esc(x.time)}</td></tr>`).join('')}</tbody></table></div>`
   :'<div class="empty"><h3>No visits yet</h3><p>Show your member QR at the front desk to check in.</p></div>'}</section>`;
 };

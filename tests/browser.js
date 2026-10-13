@@ -21,7 +21,12 @@ try{
  await login(memberAccount);await heading('Your next chapter, DEMO.');
  assert.equal(await page.getByRole('button',{name:'Admin view',exact:true}).count(),0);await page.screenshot({animations:'disabled',path:'test-results/member-desktop.png'});pass('Real customer login renders dashboard with no admin controls');
  await page.reload();await heading('Your next chapter, DEMO.');pass('Browser reload restores the Supabase session');
- await page.getByRole('button',{name:'Show my member QR',exact:true}).click();await heading('Your member QR');assert.equal(await page.locator('#member-qr-canvas').count(),1);await page.keyboard.press('Escape');pass('Active member pass renders as a scannable QR');
+ // 13A: once the member has checked in today (the integration suite checks the demo customer in), the pass shows that instead of a QR.
+ const visited=(await (await page.request.get(origin+'/api/checkin-status')).json()).checkedIn;
+ await page.getByRole('button',{name:'Show my member QR',exact:true}).click();
+ if(visited)await page.locator('.checked-in').filter({hasText:/Already checked in today at \d{1,2}:\d\d [AP]M/}).waitFor();
+ else{await heading('Your member QR');assert.equal(await page.locator('#member-qr-canvas').count(),1);}
+ await page.keyboard.press('Escape');pass(visited?'Active member pass shows today\'s check-in instead of a new QR':'Active member pass renders as a scannable QR');
  await page.getByRole('link',{name:'My payments',exact:true}).click();await heading('Your payments, at a glance.');
  await page.getByRole('link',{name:'My membership',exact:true}).click();
  await page.getByRole('button',{name:'Select Performance',exact:true}).click();await heading('Create your next membership cycle');assert.match(await page.locator('.notice').innerText(),/real invoice/);await page.keyboard.press('Escape');pass('Payments, membership navigation and honest renewal confirmation UI');

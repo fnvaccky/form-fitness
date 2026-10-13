@@ -20,5 +20,8 @@
 .attendance-filters{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px;margin:4px 0 20px}
 .attendance-filters .field{min-width:150px;margin:0}
 .my-visits{margin-top:22px}
+/* 13A: the member's check-in confirmation, shown in place of the QR. */
+.checked-in{text-align:center}.checked-in-mark{display:inline-grid;place-items:center;width:60px;height:60px;border-radius:50%;background:#e4efe3;color:var(--green);font-size:30px;font-weight:700;line-height:1;margin-bottom:12px}
+.checked-in h3{font-size:19px;letter-spacing:-.3px;margin:0 0 6px;color:var(--ink)}.checked-in p{font-size:13px;color:var(--muted);margin:0 0 16px}.checked-in .review-card{text-align:left;margin-top:14px}
 /* Administrators have five Members tabs: on phones the tab bar scrolls sideways instead of widening the page. */
 @media(max-width:680px){.attendance-body{padding:0 18px 18px}.tabs[aria-label="Membership sections"]{overflow-x:auto;scrollbar-width:none}.tabs[aria-label="Membership sections"]::-webkit-scrollbar{display:none}.tabs[aria-label="Membership sections"] .tab:focus-visible{outline-offset:-3px}}

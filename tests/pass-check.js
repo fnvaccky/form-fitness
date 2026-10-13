@@ -12,7 +12,7 @@ import {today} from '../src/validation.js';
 assert(['localhost','127.0.0.1'].includes(new URL(process.env.SUPABASE_URL).hostname),'Local fixtures only');
 // Task 13 Part 4: the member QR pass end to end, in the browser, without changing how passes or check-ins work.
 // Staff scan by pasted text, QR image and (on a phone) the camera, which Edge's fake camera feeds with a real
-// pass. Every fixture is removed afterwards.
+// pass. 13A: the member's open pass turns into the check-in confirmation. Every fixture is removed afterwards.
 const env={...process.env,GMAIL_ADDRESS:'',GMAIL_APP_PASSWORD:''};
 const db=serviceClient(env),users=[],passed=[],work=path.join(tmpdir(),'repready-pass-'+randomBytes(4).toString('hex'));
 const pass=label=>{passed.push(label);console.log('PASS: '+label);};
@@ -52,10 +52,10 @@ const browsers=[];
 try{
  await mkdir('test-results',{recursive:true});await mkdir(work,{recursive:true});
  const staff=await account('staff','LOCAL TEST Pass Desk');
- const paid=await account('member','LOCAL TEST Paid Pass','basic'),camera=await account('member','LOCAL TEST Camera Pass','basic');
+ const paid=await account('member','LOCAL TEST Paid Pass','basic'),camera=await account('member','LOCAL TEST Camera Pass','basic'),refresher=await account('member','LOCAL TEST Refresh Pass','plus');
  const unpaid=await account('member','LOCAL TEST Unpaid Pass','basic'),disabled=await account('member','LOCAL TEST Disabled Pass','basic');
  const staffApi=client();await staffApi.post('/login',{email:staff.email,password:staff.password});
- for(const member of [paid,camera,disabled]){
+ for(const member of [paid,camera,disabled,refresher]){
   const invoice=result(await db.from('ff_invoices').select('id,amount_cents').eq('member_id',member.id).single());
   await staffApi.post('/payments',{invoiceId:invoice.id,amount:invoice.amount_cents/100,method:'Cash',verified:true,date:today(),idempotencyKey:randomUUID()});
  }
@@ -70,6 +70,16 @@ try{
  }
  const showPass=async page=>{const got=page.waitForResponse(r=>r.url().endsWith('/api/qr'));await page.getByRole('button',{name:'Show my member QR',exact:true}).click();const r=await got;assert.equal(r.status(),200);return (await r.json()).token;};
  const openScanner=async page=>{await page.getByRole('button',{name:'Scan member',exact:true}).click();await page.locator('#scanner-status').waitFor();};
+ const statusPolls=page=>{const seen={count:0};page.on('request',r=>{if(r.url().endsWith('/api/checkin-status'))seen.count++;});return seen;};
+ const confirm=async page=>{const done=page.waitForResponse(r=>r.url().endsWith('/api/check-in'));await page.locator('#identity-confirmed').check();await page.getByRole('button',{name:'Confirm check-in',exact:true}).click();assert.equal((await done).status(),200);return Date.now();};
+ const confirmation=async(page,confirmedAt,label)=>{
+  await page.locator('.checked-in').filter({hasText:/Checked in — \d{1,2}:\d\d [AP]M/}).waitFor({timeout:5000});
+  const waited=Date.now()-confirmedAt;assert(waited<=5000,`${label}: the confirmation took ${waited} ms`);
+  const shown=await page.locator('.checked-in').innerText(),todayShown=await page.evaluate(d=>date(d),today());
+  assert.match(shown,/Have a good workout!/);assert(shown.includes(todayShown),`${label}: today's date (${todayShown}) is shown`);
+  assert.equal(await page.locator('#member-qr-canvas').count(),0,`${label}: the QR is gone`);
+  return {waited,shown};
+ };
  const pasteToken=async(page,token)=>{await page.locator('.scan-alternatives summary').click();await page.locator('#scan-text').fill(token);await page.getByRole('button',{name:'Verify pass',exact:true}).click();};
 
  const desktop=await chromium.launch({channel:'msedge',headless:true});browsers.push(desktop);
@@ -81,15 +91,27 @@ try{
  await pasteToken(desk,first);
  await desk.locator('#modal-title').filter({hasText:'Membership verified'}).waitFor();
  assert.equal(await desk.locator('.scan-member .badge').filter({hasText:'Already recorded'}).count(),0);
- await desk.locator('#identity-confirmed').check();await desk.getByRole('button',{name:'Confirm check-in',exact:true}).click();
+ const confirmedAt=await confirm(desk);
  await desk.locator('#toast').filter({hasText:'Check-in confirmed'}).waitFor();
  assert.equal(await checkins(paid.id),1,'one check-in recorded');
  pass('Paid member: the pass shows; staff paste its text, confirm identity and the check-in is recorded');
+ const desktopDone=await confirmation(member,confirmedAt,'desktop');assert.match(desktopDone.shown,/Essential/,'the plan is shown');
+ await shot(member,'pass-checked-in-desktop');
+ await member.getByRole('button',{name:'Close',exact:true}).click();
+ const time=desktopDone.shown.match(/Checked in — (\d{1,2}:\d\d [AP]M)/)[1];
+ assert.match(await member.locator('.my-visits').innerText(),new RegExp(`This month: 1 visit[^s][\\s\\S]*Last visit: [^\\n]*${time}`),'My visits already has the visit');
+ assert.match(await member.locator('.my-visits tbody tr').first().innerText(),new RegExp(time));
+ const reopened=member.waitForResponse(r=>r.url().endsWith('/api/checkin-status'));await member.getByRole('button',{name:'Show my member QR',exact:true}).click();await reopened;
+ await member.locator('.checked-in').filter({hasText:`Already checked in today at ${time}`}).waitFor();
+ assert.equal(await member.locator('#member-qr-canvas').count(),0,'no new QR once checked in today');
+ await shot(member,'pass-already-checked-in');
+ await member.getByRole('button',{name:'Close',exact:true}).click();
+ pass(`Desktop: the member's open pass turned into "Checked in — ${time}" ${desktopDone.waited} ms after staff confirmed, with the date and plan; My visits has the visit; reopening shows "Already checked in today"`);
  await openScanner(desk);await pasteToken(desk,first);
  await desk.locator('#form-error').filter({hasText:'This pass was already used.'}).waitFor();
  await desk.getByRole('button',{name:'Close scanner',exact:true}).click();
- const refreshing=member.waitForResponse(r=>r.url().endsWith('/api/qr'));await member.getByRole('button',{name:'Refresh pass',exact:true}).click();
- const second=(await (await refreshing).json()).token;assert.notEqual(second,first);
+ const paidApi=client();await paidApi.post('/login',{email:paid.email,password:paid.password});
+ const second=(await paidApi.get('/qr')).token;assert.notEqual(second,first);
  const image=path.join(work,'second.png');await QRCode.toFile(image,second,{width:420,margin:4});
  await openScanner(desk);await desk.locator('#scan-file').setInputFiles(image);
  await desk.locator('#modal-title').filter({hasText:'Membership verified'}).waitFor();
@@ -121,15 +143,20 @@ try{
  const phone=await phoneContext.newPage();phone.on('pageerror',e=>errors.push(e.message));
  await phone.goto(origin);await phone.getByLabel('Email address',{exact:true}).fill(staff.email);await phone.getByLabel('Password',{exact:true}).fill(staff.password);
  await phone.getByRole('button',{name:'Log in',exact:true}).click();await phone.waitForFunction(()=>currentUser);
+ const cameraPhone=await open(desktop,camera,{width:390,height:844},{isMobile:true,hasTouch:true});await showPass(cameraPhone);
  await openScanner(phone);
  await phone.locator('#modal-title').filter({hasText:'Membership verified'}).waitFor({timeout:30000});
  assert.match(await phone.locator('.scan-member').innerText(),/LOCAL TEST Camera Pass/);
  const requests=await phone.evaluate(()=>window.__cameraRequests);
  assert(requests.some(r=>/environment/.test(r)),'the back camera is asked for first: '+requests.join(' | '));
  await shot(phone,'pass-phone-camera-verified');
- await phone.locator('#identity-confirmed').check();await phone.getByRole('button',{name:'Confirm check-in',exact:true}).click();
+ const phoneConfirmedAt=await confirm(phone);
  await phone.locator('#toast').filter({hasText:'Check-in confirmed'}).waitFor();assert.equal(await checkins(camera.id),1);
  pass('Phone: the camera asks for the back camera, reads a live pass from the camera feed, and the check-in is recorded');
+ const phoneDone=await confirmation(cameraPhone,phoneConfirmedAt,'phone');
+ const card=await cameraPhone.locator('.checked-in').boundingBox();assert(card.x>=0&&card.x+card.width<=390,'the confirmation fits a phone screen');
+ await shot(cameraPhone,'pass-checked-in-phone');
+ pass(`Phone: the member's open pass turned into the confirmation ${phoneDone.waited} ms after staff confirmed`);
 
  // Phone: camera blocked.
  const blockedBrowser=await chromium.launch({channel:'msedge',headless:true});browsers.push(blockedBrowser);
@@ -141,7 +168,16 @@ try{
  pass('Phone: with the camera blocked, a readable message, and the image upload and pasted-text fallbacks stay visible');
 
  // The pass screen refreshes itself every 90 seconds while it is open (10 times at most).
- const passPhone=await open(blockedBrowser,camera,{width:390,height:844},{isMobile:true,hasTouch:true,clock:true});
+ const watcher=await open(desktop,refresher),polls=statusPolls(watcher);
+ await showPass(watcher);await watcher.waitForTimeout(6500);
+ assert(polls.count>=2&&polls.count<=4,'about every 3 seconds while the pass is open: '+polls.count);
+ const visibility=hidden=>watcher.evaluate(h=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>h});Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>h?'hidden':'visible'});document.dispatchEvent(new Event('visibilitychange'));},hidden);
+ await visibility(true);await watcher.waitForTimeout(500);let before=polls.count;await watcher.waitForTimeout(6500);assert.equal(polls.count,before,'no checks while the tab is hidden');
+ before=polls.count;await visibility(false);await watcher.waitForTimeout(1500);assert(polls.count>before,'checking resumes as soon as the tab is visible again');
+ await watcher.getByRole('button',{name:'Close',exact:true}).click();await watcher.waitForTimeout(300);before=polls.count;await watcher.waitForTimeout(6500);
+ assert.equal(polls.count,before,'no checks after the pass screen closes');
+ pass('The pass screen checks for the check-in about every 3 seconds, and stops while the tab is hidden or once the screen closes');
+ const passPhone=await open(blockedBrowser,refresher,{width:390,height:844},{isMobile:true,hasTouch:true,clock:true});
  const tokenA=await showPass(passPhone);
  await passPhone.locator('#qr-countdown').filter({hasText:/Pass expires in (8\d|90) seconds/}).waitFor();
  const box=await passPhone.locator('#member-qr-canvas').boundingBox();assert(box.width>=240&&box.width<=390,'the QR is large enough on a phone: '+box.width);
