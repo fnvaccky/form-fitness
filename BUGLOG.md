@@ -460,7 +460,7 @@ Live steps after "go": push the migration first, then release (fast-forward `mai
 Released 2026-10-13 after Clark's "go" (this migration only). The pre-flight dry run and read-only checks matched Gate 1. `supabase db push --linked` applied `20261013120000_pass_codes.sql`; its only warning was the CLI failing to cache its local pg-delta catalog. Then 18 of 18 migrations matched, and the post-push checks found 0 differences from local: tables, constraints, indexes, RLS without policies, grants, function fingerprints and the trigger. Live data was unchanged. `main` was fast-forwarded to `b5649bd`, and Production deployment `dpl_8bVRf7K9cPKB2obXauTCLKfdVqTP` is READY. Smoke tests pass, 29 of 29. No live data was created.
 A minute later, the repo owner merged PR #1 (Vercel Web Analytics) into `main` (`5316dd8`). Production is now `dpl_5wyCGB5VgnFouHnPAnHjn6iYkrk6`, which includes this release, and the smoke tests pass against it too, 29 of 29. `main` was merged into `clark-changes` (`d04d097`) so that releases can stay fast-forwards.
 
-## FEATURE-007: Member fitness survey, required at first login   (status: built)
+## FEATURE-007: Member fitness survey, required at first login   (status: released)
 Requested: 2026-10-13 by Clark (Task 11). Where: the member's first sign-in, My membership, Add member, and the staff's member overview; roles: member, staff, admin. (The task file says FEATURE-004, but Task 10 took that number first.)
 Credit: built on a classmate's survey work (`fitness-survey-update.zip`, made against `main` `ed44803`). It included:
 - the `ff_member_surveys` table and its RLS, and `ff_save_member_survey`;
@@ -507,3 +507,4 @@ Test added:
   - Fixture members come with a survey, as if filled in at the desk.
   - The onboarding test fills in the desk survey.
   - The demo suites save their customers' surveys.
+Released 2026-10-14 after Clark's "go" (this migration only), with the paid-member routing he asked for first. The pre-flight matched Gate 1 (live `register_auth_user` was still Task 10's, `ba30146e…`), and `supabase db push --linked` applied `20261013180000_member_survey.sql` (with the usual CLI cache warning). Then 20 of 20 migrations matched, and the post-push checks found 0 differences from local. Live data was unchanged: 1 member, no surveys yet. `main` was fast-forwarded to `2f74b00`, and Production deployment `dpl_5mz3jYvjZRFBaHFHqqreYPDucNb2` is READY. Smoke tests pass, 34 of 34. John Garcia has a paid cycle, so he sees the card, not the full-screen survey.
