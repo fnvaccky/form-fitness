@@ -359,6 +359,7 @@ Test added:
   - the demo integration and browser suites.
 First release attempt: `main` was fast-forwarded to `f4240c7` and pushed on 2026-10-12 at 15:12 UTC, but no deployment was ever created. Vercel's incident "Increased build and deployment failures" (13:35 to 20:11 UTC, with Git Integrations partly down) dropped the push event, and Production stayed on `dpl_3iRXwgD8z6SDEZDLvT2vB5V7qSVm`. So `main` is fast-forwarded again, to the BUGLOG-only commit that adds this note, to trigger the build.
 Released 2026-10-13 with BUG-015, after Vercel's incident was resolved. `main` was fast-forwarded to `41b1201`, and Production deployment `dpl_Fw1ezbaLKFRab1UMLk7H7TFz53CK` is READY; it built in about 30 seconds. Smoke tests pass, 22 of 22. They include `GET /api/reports/attendance` answering 401 when signed out and with a forged session cookie. The attendance and pass scripts served are identical to the commit. No migration, and no live data was created.
+13 October (Task 13 v2, 13A): My visits also shows "Last visit", and member-facing times (My visits and the pass) use the 12-hour clock, for example "10:15 AM". The staff report keeps 24-hour times. See BUG-016.
 
 ## BUG-015: The member pass stopped at "Pass expired" instead of refreshing   (status: fixed)
 Found: 2026-10-12 while checking the QR pass end to end (Task 13, Part 4). Where: the member's QR pass screen.
@@ -374,3 +375,34 @@ Test added:
 - `tests/pass-check.js` (`npm run test:pass`): with the browser clock fast-forwarded, the pass refreshes itself 10 times and then shows "Pass expired". Without the fix, the test fails at the first refresh.
 - The same suite covers the rest of Part 4. It checks pasted text, image upload and camera scans, the already-used and already-recorded passes, refusing unpaid and disabled members, the back camera, and the blocked-camera fallbacks.
 Released 2026-10-13 with FEATURE-005, in Production deployment `dpl_Fw1ezbaLKFRab1UMLk7H7TFz53CK`.
+
+## BUG-016: The member got no check-in confirmation   (status: fixed)
+Reported: 2026-10-13 by Clark (Task 13 v2, testing live). Where: staff Confirm check-in, and the member's pass screen.
+What happened: staff confirmed John Garcia's check-in, and the toast said "Check-in confirmed. Member notification queued." John saw nothing.
+Root cause (read-only checks on live):
+- **The toast is fixed text.** The browser shows it after every check-in, whatever happens next.
+- **Each check-in queues an email.** `ff_private.command('check-in')` calls `ff_private.notify`, which inserts a `queued` row into `ff_notifications`: "RepReady check-in confirmed", to the member's email address.
+- **Nothing on live sends it.** Only `flushEmails` (Gmail SMTP, `src/notifications.js`) sends queued rows. It runs after some API calls, and only when `GMAIL_ADDRESS` and `GMAIL_APP_PASSWORD` are set; Production has neither. No cron sends them (the only cron is the account clean-up), and members have no in-app inbox.
+- **So every production notification is still queued.** That's 3 rows, none ever sent: a membership notice, the GCash payment confirmation, and John's check-in (13 Oct, 00:05 Manila).
+Fix (no migration):
+- **Confirmation on the pass:** while the member's pass screen is open and the tab is visible, it asks `GET /api/checkin-status` about every 3 seconds. That endpoint is for members only and reads just the caller's own row for today.
+- When the check-in appears, the QR becomes "✓ Checked in — 10:15 AM" and "Have a good workout!", with the date and plan. My visits refreshes behind it.
+- **Reopening** the pass later that day shows "Already checked in today at 10:15 AM" instead of a new QR.
+- **Checks stop** when the screen closes or the tab is hidden, and resume as soon as the tab is visible again.
+- **The staff toast** now says "Check-in confirmed. The member sees it on their pass and in My visits."
+- **No email per check-in.** It would use up the email quota.
+Still open (a recommendation, not done): if a Gmail sender is ever configured, every queued check-in email would go out at once, and each new check-in would send one more. Recommended: stop queueing check-in notifications, and mark the queued ones `suppressed` (in-app only), keeping every row. That needs a migration, so it goes through Gate 1.
+Test added:
+- `tests/attendance.test.js`: 12-hour Manila times; the status reads only the caller's own row for today.
+- `tests/attendance.js`:
+  - the status shows the member's own check-in, with its time, date and plan;
+  - other members' check-ins today don't count;
+  - staff get 403, and signed-out callers get 401;
+  - Last visit, and 12-hour times in My visits.
+- `tests/pass-check.js`:
+  - on desktop and on a phone, the open pass turns into the confirmation about 2.5 seconds after staff confirm (the test allows 5);
+  - My visits has the visit;
+  - reopening shows "Already checked in today";
+  - the screen checks about every 3 seconds, and not at all while the tab is hidden or after it closes;
+  - the self-refresh test now uses a member who hasn't checked in.
+- `tests/browser.js`: the demo customer's pass shows today's check-in once the integration suite has checked them in.
