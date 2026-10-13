@@ -400,6 +400,7 @@ Fix (no migration):
 - **The staff toast** now says "Check-in confirmed. The member sees it on their pass and in My visits."
 - **No email per check-in.** It would use up the email quota.
 Still open (a recommendation, not done): if a Gmail sender is ever configured, every queued check-in email would go out at once, and each new check-in would send one more. Recommended: stop queueing check-in notifications, and mark the queued ones `suppressed` (in-app only), keeping every row. That needs a migration, so it goes through Gate 1.
+Follow-up, 2026-10-13: Clark agreed. Migration `20261013150000_checkin_emails_off.sql` makes `ff_private.notify` skip check-in events and marks queued check-in emails `suppressed`, keeping every row. Tested in `tests/checkin-emails.sql` (6 checks). Waiting at Gate 1.
 Test added:
 - `tests/attendance.test.js`: 12-hour Manila times; the status reads only the caller's own row for today.
 - `tests/attendance.js`:
