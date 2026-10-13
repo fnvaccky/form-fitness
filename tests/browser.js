@@ -9,7 +9,8 @@ const browser=await chromium.launch({headless:true});
 const context=await browser.newContext({viewport:{width:1440,height:1000}});
 if(process.env.VERCEL_AUTOMATION_BYPASS_SECRET)await context.request.get(origin,{headers:{'x-vercel-protection-bypass':process.env.VERCEL_AUTOMATION_BYPASS_SECRET,'x-vercel-set-bypass-cookie':'true'}});
 const page=await context.newPage();const errors=[],checks=[];
-page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error'&&!m.text().includes('status of 400')&&!m.text().includes('status of 401'))errors.push(m.text());});
+// Vercel Web Analytics (PR #1) loads /_vercel/insights/script.js, which exists only on Vercel; locally it is a 404.
+page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error'&&!m.text().includes('status of 400')&&!m.text().includes('status of 401')&&!m.location().url.includes('/_vercel/insights/'))errors.push(m.text());});
 const pass=s=>{checks.push(s);console.log('PASS: '+s);};
 const heading=async name=>{await page.getByRole('heading',{name,exact:true}).waitFor();};
 const login=async a=>{await page.getByLabel('Email address',{exact:true}).fill(a.email);await page.getByLabel('Password',{exact:true}).fill(a.password);await page.getByRole('button',{name:'Log in',exact:true}).click();};
