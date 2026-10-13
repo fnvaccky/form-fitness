@@ -67,3 +67,10 @@
 .survey-desk .survey-question{margin-top:18px}
 .survey-desk .survey-choice{min-height:40px;padding:8px 11px;font-size:13px}
 @media(max-width:680px){.survey-first{padding:18px 16px 36px}.survey-first .panel-header h1{font-size:22px}}
+/* A paid member without a survey: a reminder at the top of the overview and My membership, and a note on the renew screen. */
+.survey-card{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:18px 22px;margin:0 0 20px;border-color:#c9d8bf;background:#f4f8ef}
+.survey-card p{margin:0;font-size:14px;line-height:1.6;color:var(--ink)}
+.survey-card .button{flex-shrink:0;min-height:42px}
+.survey-renew-note{margin:0 0 14px}
+.survey-renew-note a{color:inherit;text-decoration:underline;text-underline-offset:3px}
+@media(max-width:680px){.survey-card{flex-direction:column;align-items:stretch;padding:16px 18px}}

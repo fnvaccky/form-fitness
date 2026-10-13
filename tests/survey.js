@@ -9,8 +9,8 @@ import {serviceClient,result} from '../src/supabase.js';
 import {today} from '../src/validation.js';
 assert(['localhost','127.0.0.1'].includes(new URL(process.env.SUPABASE_URL).hostname),'Local fixtures only');
 // Task 11 end to end on the local stack: the fitness survey required at first login (screen and API), plan
-// selection after it, the desk survey in Add member, staff read-only, and Task 10's clean-up removing a never-paid
-// account's survey. No PayMongo call is made (the survey check refuses first). Every fixture is removed afterwards.
+// selection after it, a paid member who keeps using the app while the survey waits, the desk survey in Add member,
+// staff read-only, and Task 10's clean-up removing a never-paid account's survey. No PayMongo call is made (the survey check refuses first). Every fixture is removed afterwards.
 const env={...process.env,GMAIL_ADDRESS:'',GMAIL_APP_PASSWORD:'',PAYMONGO_ALLOW_LIVE:'false',PAYMONGO_SECRET_KEY:'sk_test_'+randomBytes(24).toString('hex')};
 const db=serviceClient(env),users=[],passed=[];
 const pass=label=>{passed.push(label);console.log('PASS: '+label);};
@@ -104,6 +104,68 @@ try{
  }
  pass('Browser, desktop and phone: first login shows only the survey (with Sign out); after saving, "Thanks! Choose your plan next." and plan selection, where the member creates their first invoice');
 
+ // A member with a paid cycle and no survey isn't stopped: a card asks for it, and the pass, its code, the check-in
+ // confirmation and My visits all work. Choosing the next plan waits for the survey, and the renew screen says why.
+ const paid=await addMember(staffApi,'Paid',{plan:'basic',start});
+ const paidInvoice=result(await db.from('ff_invoices').select('id,amount_cents').eq('member_id',paid.id).single());
+ await staffApi.post('/payments',{invoiceId:paidInvoice.id,amount:paidInvoice.amount_cents/100,method:'Cash',verified:true,date:start,idempotencyKey:randomUUID()});
+ const card='Complete your fitness profile — it takes a minute and helps us recommend the right plan.';
+ const paidPage=await signIn(paid);
+ await paidPage.locator('.survey-card').filter({hasText:card}).waitFor();
+ assert.equal(await paidPage.locator('.survey-first').count(),0,'a paid member is not stopped by the survey');
+ assert.equal(await paidPage.locator('.page-heading + .survey-card, .survey-card + .member-pass-bar').count()>0,true,'the card is at the top of the overview');
+ await paidPage.screenshot({path:'test-results/survey-paid-overview-desktop.png',fullPage:true,animations:'disabled'});
+ const issued=paidPage.waitForResponse(r=>r.url().endsWith('/api/qr'));
+ await paidPage.getByRole('button',{name:'Show my member QR',exact:true}).click();
+ const memberPass=await (await issued).json();
+ await paidPage.locator('#pass-code').filter({hasText:memberPass.code}).waitFor();
+ const scanned=await staffApi.post('/scan',{code:memberPass.code.toLowerCase().replace('-','')});
+ assert.equal(scanned.member.id,paid.id,'staff find the member by the pass code');
+ await staffApi.post('/check-in',{token:scanned.token,confirmed:true});
+ await paidPage.locator('.checked-in').filter({hasText:/Checked in — \d{1,2}:\d\d [AP]M/}).waitFor({timeout:5000});
+ const paidApi=client(app.origin);await paidApi.post('/login',{email:paid.email,password:paid.password});
+ assert.equal((await paidApi.get('/checkin-status')).checkedIn,true,'the check-in status works');
+ await paidPage.getByRole('button',{name:'Close',exact:true}).click();
+ await paidPage.locator('.my-visits').filter({hasText:'This month: 1 visit'}).waitFor();
+ await paidPage.getByRole('link',{name:'My membership',exact:true}).click();
+ await paidPage.locator('.survey-card').filter({hasText:card}).waitFor();
+ assert.equal(await paidPage.locator('.survey-card + .member-hero').count(),1,'the card is at the top of My membership');
+ await paidPage.locator('[data-action="select-plan"][data-plan="basic"]').click();
+ await paidPage.locator('.survey-renew-note').filter({hasText:'Choosing your next plan comes after your fitness profile.'}).waitFor();
+ assert.equal(await paidPage.locator('[form="renew-form"][type="submit"]').isDisabled(),true,'the renew button waits for the survey');
+ await paidPage.screenshot({path:'test-results/survey-paid-renew-note.png',animations:'disabled'});
+ assert.equal((await paidApi.post('/renew',{plan:'basic',start:result(await db.from('ff_memberships').select('end_date').eq('member_id',paid.id).single()).end_date},403)).error,'Complete your fitness survey first.','the API still refuses renewal');
+ await paidPage.getByRole('link',{name:'Complete your fitness profile',exact:true}).click();
+ await paidPage.locator('#member-survey-form').waitFor();
+ await paidPage.getByLabel('How familiar are you with training?',{exact:true}).selectOption('regular');
+ await paidPage.getByLabel('Cardio',{exact:true}).check();await paidPage.getByLabel('Sunday',{exact:true}).check();
+ await paidPage.getByRole('button',{name:'Save my answers',exact:true}).click();
+ await paidPage.getByRole('button',{name:'Edit answers',exact:true}).waitFor();
+ assert.equal(await paidPage.locator('.survey-card').count(),0,'the card goes once the survey is saved');
+ await paidPage.locator('[data-action="select-plan"][data-plan="basic"]').click();
+ assert.equal(await paidPage.locator('.survey-renew-note').count(),0);
+ assert.equal(await paidPage.locator('[form="renew-form"][type="submit"]').isDisabled(),false,'now the next plan can be chosen');
+ await paidPage.close();
+ const phone=await signIn(await (async()=>{const m=await addMember(staffApi,'PaidPhone',{plan:'basic',start});const i=result(await db.from('ff_invoices').select('id,amount_cents').eq('member_id',m.id).single());
+  await staffApi.post('/payments',{invoiceId:i.id,amount:i.amount_cents/100,method:'Cash',verified:true,date:start,idempotencyKey:randomUUID()});return m;})(),{width:390,height:844});
+ await phone.locator('.survey-card').filter({hasText:card}).waitFor();
+ assert.equal(await phone.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'the card fits a phone');
+ const box=await phone.locator('.survey-card .button').boundingBox();assert(box.width>=200,'a full-width button on a phone');
+ await phone.screenshot({path:'test-results/survey-paid-overview-phone.png',fullPage:true,animations:'disabled'});
+ await phone.close();
+ pass('A paid member without a survey is not stopped: the card sits at the top of the overview and My membership (desktop and phone); the pass, its code, the check-in confirmation, check-in status and My visits work; the renew screen explains and the API refuses renewal until the survey is saved from the card');
+
+ // A member without a paid cycle is fully blocked, even with an unpaid plan chosen at the desk.
+ const unpaid=await addMember(staffApi,'Unpaid',{plan:'basic',start});
+ const unpaidPage=await signIn(unpaid);
+ await unpaidPage.locator('.survey-first').waitFor();
+ assert.equal(await unpaidPage.locator('.survey-card').count(),0,'no card: the whole screen is the survey');
+ assert.equal(await unpaidPage.getByRole('button',{name:/Pay now|Show my member QR/}).count(),0,'nothing else until the survey is saved');
+ const unpaidApi=client(app.origin);await unpaidApi.post('/login',{email:unpaid.email,password:unpaid.password});
+ assert.equal((await unpaidApi.post('/paymongo/checkout',{kind:'invoice',invoiceId:result(await db.from('ff_invoices').select('id').eq('member_id',unpaid.id).single()).id,method:'gcash',requestId:randomUUID()},403)).error,'Complete your fitness survey first.');
+ await unpaidPage.close();
+ pass('A member without a paid cycle is fully blocked: only the survey on screen, and no checkout through the API');
+
  // At the desk: a survey filled in with the member means no prompt; staff read it and can't change it.
  const desk=await addMember(staffApi,'Desk',{goal:'Manage weight',survey:deskSurvey});
  const deskPage=await signIn(desk);
@@ -112,7 +174,7 @@ try{
  await deskPage.getByRole('link',{name:'My membership',exact:true}).click();
  await deskPage.getByRole('heading',{name:'Your fitness profile',exact:true}).waitFor();
  assert.match(await deskPage.locator('#fitness-survey').innerText(),/Manage weight[\s\S]*I’m new to training[\s\S]*Cardio[\s\S]*Saturday/);
- await deskPage.screenshot({path:'test-results/survey-fitness-profile.png',fullPage:true});
+ await deskPage.screenshot({path:'test-results/survey-fitness-profile.png',fullPage:true,animations:'disabled'});
  const seen=(await staffApi.get('/state')).members.find(m=>m.id===desk.id);
  assert.deepEqual({experience:seen.survey.experience,exercises:seen.survey.exercises,availableDays:seen.survey.availableDays,goal:seen.goal},{...deskSurvey,goal:'Manage weight'},'staff read the answers');
  assert.equal((await staffApi.post('/member-survey',answers,403)).error,'Only members can save their own survey.');

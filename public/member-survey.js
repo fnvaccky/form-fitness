@@ -2,7 +2,9 @@
 // Task 11: the member fitness survey, required at first login. Ported from a classmate's survey work
 // (fitness-survey-update.zip): the four questions, the form with its checks, error summary and focus handling,
 // editing and cancelling, and the staff's read-only view. New here:
-// - a member without a survey sees only the survey after signing in (no skip; Sign out stays);
+// - a member without a survey and without a paid current or upcoming cycle (a new account) sees only the survey
+//   after signing in (no skip; Sign out stays). A paid member isn't stopped: a card on the overview and My membership
+//   asks for it, and the renew screen explains that choosing the next plan waits for it;
 // - staff can fill it in at the desk during Add member;
 // - members edit it under My membership → "Your fitness profile";
 // - recommendPlans, the hook Task 12 fills in.
@@ -17,6 +19,12 @@ const surveyOptions = {
 const surveyLabel = (options, value) => options.find(([key]) => key === value)?.[1] || 'Not provided';
 // Shown once on plan selection, straight after the first save.
 let surveyThanks = false;
+// A fully paid cycle that is current or still to come: such a member keeps using the app while the survey waits.
+const hasPaidCycle = member => state.invoices.some(i => i.memberId === member.id && i.paidCents >= i.amountCents && i.end >= DEMO_DATE);
+const surveyCard = () => '<section class="panel survey-card" aria-label="Fitness profile"><p><strong>Complete your fitness profile</strong> — it takes a minute and helps us recommend the right plan.</p><button class="button primary" data-action="survey-open">Complete fitness profile</button></section>';
+// The card goes at the top of the page, before the first of these that the page has.
+const withSurveyCard = (html, markers) => { const marker = markers.find(m => html.includes(m)); return marker ? html.replace(marker, surveyCard() + marker) : surveyCard() + html; };
+const ownMemberWithoutSurvey = () => { const member = currentUser?.role === 'member' ? memberById(currentUser.memberId) : null; return member && !member.survey ? member : null; };
 
 // Task 12 puts its plan recommendation here: the plans that suit these answers, best first. None yet.
 function recommendPlans(survey, plans) {
@@ -90,10 +98,10 @@ function deskSurveyAnswers() {
 }
 
 {
-  const surveyBaseRender = render, surveyBaseMembership = memberMembership, surveyBaseOverview = memberOverview, surveyBaseProfile = profile;
+  const surveyBaseRender = render, surveyBaseMembership = memberMembership, surveyBaseOverview = memberOverview, surveyBaseProfile = profile, surveyBaseSelectPlan = selectPlan;
   render = function() {
     const member = authReady && currentUser?.role === 'member' ? memberById(currentUser.memberId) : null;
-    if (member && !member.survey) {
+    if (member && !member.survey && !hasPaidCycle(member)) {
       // Keep answers already chosen if something asks for a fresh render while the member is filling it in.
       if (document.querySelector('.survey-first #member-survey-form')) return;
       document.title = 'RepReady · Welcome';
@@ -104,17 +112,28 @@ function deskSurveyAnswers() {
     surveyBaseRender();
   };
   memberMembership = function() {
-    const html = surveyBaseMembership(), member = memberById(selectedMember), marker = '<div class="panel-header" style="padding-left:0">';
-    return member && html.includes(marker) ? html.replace(marker, memberSurveyPanel(member) + marker) : html;
+    const member = memberById(selectedMember), marker = '<div class="panel-header" style="padding-left:0">';
+    let html = surveyBaseMembership();
+    if (member && html.includes(marker)) html = html.replace(marker, memberSurveyPanel(member) + marker);
+    return ownMemberWithoutSurvey() ? withSurveyCard(html, ['<section class="member-hero">']) : html;
   };
   // Straight after the first save: thanks, and on to plan selection (Task 12 recommends plans here).
   memberOverview = function() {
     const html = surveyBaseOverview(), member = memberById(selectedMember);
+    if (ownMemberWithoutSurvey()) return withSurveyCard(html, ['<div class="member-pass-bar">','<section class="member-hero">']);
     if (!surveyThanks || currentUser?.role !== 'member' || !member || member.start) return html;
     const recommended = recommendPlans(member.survey, plans);
     const note = `<div class="notice survey-thanks" role="status" tabindex="-1"><strong>Thanks! Choose your plan next.</strong>${recommended.length?` Suggested for you: ${recommended.map(p=>esc(p.name)).join(', ')}.`:''}</div>`;
     const at = html.indexOf('<div class="notice">');
     return at < 0 ? note + html : html.slice(0, at) + note + html.slice(at);
+  };
+  // The renew screen: until the survey is saved the next plan can't be chosen (the API refuses it too), so say why.
+  selectPlan = function(id) {
+    surveyBaseSelectPlan(id);
+    const form = document.getElementById('renew-form');
+    if (!form || !ownMemberWithoutSurvey()) return;
+    form.insertAdjacentHTML('afterbegin', '<div class="notice survey-renew-note" role="alert">Choosing your next plan comes after your fitness profile. <a href="#/member/members" data-action="survey-open">Complete your fitness profile</a> first; it takes a minute.</div>');
+    document.querySelectorAll('[form="renew-form"]').forEach(button => { button.disabled = true; });
   };
   profile = function(id) {
     surveyBaseProfile(id);
@@ -124,9 +143,17 @@ function deskSurveyAnswers() {
 
 document.addEventListener('click', event => {
   const button = event.target.closest('[data-action]');
-  if (!button || !['survey-edit','survey-cancel'].includes(button.dataset.action)) return;
+  if (!button || !['survey-open','survey-edit','survey-cancel'].includes(button.dataset.action)) return;
   event.preventDefault(); event.stopImmediatePropagation();
   if (currentUser?.role !== 'member') return;
+  if (button.dataset.action === 'survey-open') {
+    // From the card or the renew screen: My membership, at the survey form.
+    if (document.querySelector('.modal-backdrop')) closeModal();
+    if (section !== 'members') navigate('members');
+    const title = document.getElementById('survey-title');
+    title?.scrollIntoView({block:'start'}); title?.focus();
+    return;
+  }
   replaceSurvey(button.dataset.action === 'survey-edit');
 }, true);
 
@@ -158,8 +185,16 @@ document.addEventListener('submit', async event => {
     const saved = await api('/member-survey', answers);
     // A member may navigate or sign out while the save is in flight.
     if (currentUser?.role !== 'member' || currentUser.memberId !== memberId) return;
-    const member = memberById(memberId), first = !member.survey;
+    const member = memberById(memberId), first = !member.survey, paid = hasPaidCycle(member);
     Object.assign(member, {goal:saved.goal,survey:saved.survey});
+    if (first && paid) {
+      // A paid member answered from the card: stay here; the card goes.
+      render();
+      const status = document.getElementById('survey-status');
+      if (status) { status.textContent = 'Your answers are saved. You can update them anytime.'; status.focus(); }
+      toast('Thanks! Your fitness profile is saved.');
+      return;
+    }
     if (first) {
       // The first save opens the app: thanks, and on to plan selection (or the overview if a plan exists).
       surveyThanks = true; mode = 'member'; section = 'overview';
