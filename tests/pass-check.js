@@ -12,7 +12,8 @@ import {today} from '../src/validation.js';
 assert(['localhost','127.0.0.1'].includes(new URL(process.env.SUPABASE_URL).hostname),'Local fixtures only');
 // Task 13 Part 4: the member QR pass end to end, in the browser, without changing how passes or check-ins work.
 // Staff scan by pasted text, QR image and (on a phone) the camera, which Edge's fake camera feeds with a real
-// pass. 13A: the member's open pass turns into the check-in confirmation. Every fixture is removed afterwards.
+// pass. 13A: the member's open pass turns into the check-in confirmation. 13B: staff can type the short pass code
+// shown under the QR. Every fixture is removed afterwards.
 const env={...process.env,GMAIL_ADDRESS:'',GMAIL_APP_PASSWORD:''};
 const db=serviceClient(env),users=[],passed=[],work=path.join(tmpdir(),'repready-pass-'+randomBytes(4).toString('hex'));
 const pass=label=>{passed.push(label);console.log('PASS: '+label);};
@@ -52,10 +53,10 @@ const browsers=[];
 try{
  await mkdir('test-results',{recursive:true});await mkdir(work,{recursive:true});
  const staff=await account('staff','LOCAL TEST Pass Desk');
- const paid=await account('member','LOCAL TEST Paid Pass','basic'),camera=await account('member','LOCAL TEST Camera Pass','basic'),refresher=await account('member','LOCAL TEST Refresh Pass','plus');
+ const paid=await account('member','LOCAL TEST Paid Pass','basic'),camera=await account('member','LOCAL TEST Camera Pass','basic'),refresher=await account('member','LOCAL TEST Refresh Pass','plus'),typed=await account('member','LOCAL TEST Typed Pass','basic');
  const unpaid=await account('member','LOCAL TEST Unpaid Pass','basic'),disabled=await account('member','LOCAL TEST Disabled Pass','basic');
  const staffApi=client();await staffApi.post('/login',{email:staff.email,password:staff.password});
- for(const member of [paid,camera,disabled,refresher]){
+ for(const member of [paid,camera,disabled,refresher,typed]){
   const invoice=result(await db.from('ff_invoices').select('id,amount_cents').eq('member_id',member.id).single());
   await staffApi.post('/payments',{invoiceId:invoice.id,amount:invoice.amount_cents/100,method:'Cash',verified:true,date:today(),idempotencyKey:randomUUID()});
  }
@@ -121,6 +122,31 @@ try{
  await shot(desk,'pass-already-recorded');
  await desk.keyboard.press('Escape');assert.equal(await checkins(paid.id),1,'still one check-in');
  pass('The same QR again: "This pass was already used." A fresh QR the same day, scanned from an image: "Already recorded", and Confirm is disabled');
+ // 13B: the pass code under the QR, readable on a phone; staff type it in any case, with a space for the dash.
+ const CODE=/^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/;
+ const typedPhone=await open(desktop,typed,{width:390,height:844},{isMobile:true,hasTouch:true});await showPass(typedPhone);
+ const typedCode=await typedPhone.locator('#pass-code').innerText();assert.match(typedCode,CODE,'the code is XXXX-XXXX in Crockford base32');
+ const look=await typedPhone.locator('#pass-code').evaluate(e=>({size:parseFloat(getComputedStyle(e).fontSize),left:e.getBoundingClientRect().left,right:e.getBoundingClientRect().right,below:e.getBoundingClientRect().top>=document.getElementById('member-qr-canvas').getBoundingClientRect().bottom}));
+ assert(look.size>=24&&look.left>=0&&look.right<=390&&look.below,'large, on screen and under the QR: '+JSON.stringify(look));
+ await shot(typedPhone,'pass-code-phone');
+ const typeCode=async value=>{await openScanner(desk);await desk.locator('.scan-alternatives summary').click();await desk.locator('#scan-text').fill(value);await desk.getByRole('button',{name:'Verify pass',exact:true}).click();};
+ await typeCode(typedCode==='7KQ2-M9XD'?'7KQ2-M9XA':'7KQ2-M9XD');
+ assert.equal(await desk.getByLabel('Pass code',{exact:true}).getAttribute('placeholder'),'e.g. 7KQ2-M9XD');
+ await desk.locator('#form-error').filter({hasText:'Pass code not recognised. Check it with the member.'}).waitFor();
+ await desk.locator('#scan-text').fill(typedCode.toLowerCase().replace('-',' '));await desk.getByRole('button',{name:'Verify pass',exact:true}).click();
+ await desk.locator('#modal-title').filter({hasText:'Membership verified'}).waitFor();
+ assert.match(await desk.locator('.scan-member').innerText(),/LOCAL TEST Typed Pass/);
+ assert.equal(await desk.locator('#identity-confirmed').isChecked(),false,'the photo-ID box is still required');
+ const typedConfirmedAt=await confirm(desk);await desk.locator('#toast').filter({hasText:'Check-in confirmed'}).waitFor();
+ assert.equal(await checkins(typed.id),1,'checked in by the typed code');
+ await confirmation(typedPhone,typedConfirmedAt,'typed code');
+ await typeCode(typedCode);await desk.locator('#form-error').filter({hasText:'This pass code was already used.'}).waitFor();
+ await desk.getByRole('button',{name:'Close scanner',exact:true}).click();
+ pass('Pass code: readable under the QR on a phone; staff type it in lower case with a space for the dash, still tick the photo ID, and check the member in; a wrong code and a used code are refused');
+ const guard=await account('staff','LOCAL TEST Code Guard'),guardApi=client();await guardApi.post('/login',{email:guard.email,password:guard.password});
+ for(let i=1;i<=10;i++)assert.equal((await guardApi.post('/scan',{code:'0000-00'+String(i).padStart(2,'0')},400)).error,'Pass code not recognised. Check it with the member.');
+ assert.equal((await guardApi.post('/scan',{code:typedCode},429)).error,'Too many attempts — wait a few minutes.');
+ pass('Through the API: ten wrong codes from one staff account, then 429 "Too many attempts — wait a few minutes."');
  const unpaidPage=await open(desktop,unpaid);
  await unpaidPage.locator('.member-pass-bar').filter({hasText:'Your membership starts after full payment'}).waitFor();
  assert.equal(await unpaidPage.getByRole('button',{name:'Show my member QR',exact:true}).count(),0);
@@ -185,7 +211,8 @@ try{
  let previous=tokenA;
  for(let i=1;i<=10;i++){
   const next=passPhone.waitForResponse(r=>r.url().endsWith('/api/qr'));await passPhone.clock.fastForward(91000);
-  const token=(await (await next).json()).token;assert.notEqual(token,previous,`refresh ${i} brings a new pass`);previous=token;
+  const fresh=await (await next).json(),token=fresh.token;assert.notEqual(token,previous,`refresh ${i} brings a new pass`);previous=token;
+  await passPhone.locator('#pass-code').filter({hasText:fresh.code}).waitFor();assert.match(fresh.code,CODE,'and a new code with it');
   await passPhone.locator('#qr-countdown').filter({hasText:/Pass expires in (8\d|90) seconds/}).waitFor();
   assert.equal(await passPhone.locator('#member-qr-canvas').evaluate(c=>c.style.opacity),'','the fresh QR is fully visible');
  }

@@ -141,7 +141,12 @@ export async function handle(req,res,env=process.env) {
     if(path==='/staff'||path.startsWith('/staff/'))admin();
     if(path==='/login')return send(res,200,{ok:true,user:userView(profile)});
     if(path==='/state' && req.method==='GET')return send(res,200,await stateFor(client,profile,env));
-    if(path==='/qr' && req.method==='GET')return send(res,200,await rpc('qr'));
+    if(path==='/qr' && req.method==='GET'){
+      const pass=await rpc('qr');
+      // 13B: the short code shown under the QR: the same pass, sharing its nonce and 90 seconds.
+      const issued=result(await client.rpc('ff_pass_code',{action:'issue',body:{token:pass.token}}));
+      return send(res,200,{...pass,code:issued.code});
+    }
     // 13A: the member's pass screen asks whether they have checked in today; only their own row is read.
     if(path==='/checkin-status' && req.method==='GET'){if(profile.role!=='member')fail('Sign in as a member.',403);return send(res,200,await checkinStatus(client,profile,today()));}
     // Task 13: attendance for gym staff, read through the caller's session (RLS keeps it to their workspace).
@@ -219,7 +224,15 @@ export async function handle(req,res,env=process.env) {
     if(path==='/plans'){admin();body.priceCents=cents(body.price);if(typeof body.name!=='string'||/[<>\r\n]/.test(body.name))fail('Enter a valid plan name.');}
     const allowed=['profile','payments','payment-submissions','review-payment','scan','check-in','settings/payments','plans','manage-member','renew'];
     if(!allowed.includes(path.slice(1)))fail('Endpoint not found.',404);
+    // 13B: a typed pass code brings back the member's own signed pass, so the scan (and the check-in after it) is the QR's.
+    let viaCode=false;
+    if(path==='/scan' && typeof body.code==='string' && !body.token){
+      const found=result(await client.rpc('ff_pass_code',{action:'lookup',body:{code:body.code}}));
+      if(found.error)fail(found.error,found.status);
+      body.token=found.token;delete body.code;viaCode=true;
+    }
     const data=await rpc(path.slice(1),body);
+    if(viaCode)data.token=body.token;
     if(data.payment)data.payment=paymentView(data.payment);
     if(data.member){const snapshot=await stateFor(client,profile,env);data.member=snapshot.members.find(m=>m.id===data.member.id)||data.member;}
     if(['payments','review-payment','check-in','renew'].includes(path.slice(1)) && env.GMAIL_ADDRESS && env.GMAIL_APP_PASSWORD && env.SUPABASE_SECRET_KEY) {

@@ -790,14 +790,18 @@ test('a repeat same-day check-in maps to 409 like the other already-recorded con
 
 test('scanning a member already checked in today shows the recorded visit and blocks confirmation',async()=>{
  const {readFile}=await import('node:fs/promises');const vm=await import('node:vm');
- const source=(await readFile('public/connected.js','utf8')).match(/^async function verifyScanned\(token\)\{.*$/m)?.[0];
+ const source=(await readFile('public/connected.js','utf8')).match(/^async function verifyScanned\([^)]*\)\{.*$/m)?.[0];
  assert(source,'verifyScanned must stay a single top-level function in connected.js');
- const render=async alreadyCheckedInAt=>{
+ const render=async(alreadyCheckedInAt,typed)=>{
   let modal;const member={id:'M-1',name:'Test Member',phone:'09170000004',plan:'basic',end:'2026-10-31',photo:''};
-  const sandbox={api:async()=>({member,expires:0,alreadyCheckedInAt}),closeModal(){},openModal:(title,subtitle,body,foot)=>{modal={body,foot};},
+  const sandbox={api:async(path,body)=>{sandbox.sent=body;return {member,expires:0,alreadyCheckedInAt,...(typed?{token:'FORM2.from-code'}:{})};},closeModal(){},openModal:(title,subtitle,body,foot)=>{modal={body,foot};},
    avatar:()=>'',esc:s=>String(s),badge:s=>`<span class="badge">${s}</span>`,planOf:()=>({name:'Basic'}),date:d=>d,btn:label=>`<button>${label}</button>`};
-  vm.runInNewContext(source,sandbox);await sandbox.verifyScanned('FORM2.token');return modal;
+  vm.runInNewContext(source,sandbox);await sandbox.verifyScanned(typed?'7kq2 m9xd':'FORM2.token',typed);return {...modal,sent:sandbox.sent,token:sandbox.lastScannedToken};
  };
+ // 13B: a typed pass code goes to the server as a code, and the check-in then uses the pass the server returned.
+ const typed=await render(null,true);
+ assert.deepEqual({...typed.sent},{code:'7kq2 m9xd'},'the sandbox object is copied out of its realm first');assert.equal(typed.token,'FORM2.from-code');
+ assert.deepEqual({...(await render(null)).sent},{token:'FORM2.token'},'a scanned QR still goes as a token');
  const fresh=await render(null);
  assert.doesNotMatch(fresh.body,/Already recorded/);assert.doesNotMatch(fresh.foot,/disabled/);
  // The database returns microsecond timestamptz JSON; 06:05 UTC is 14:05 in Manila.
