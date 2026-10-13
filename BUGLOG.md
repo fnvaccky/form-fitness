@@ -19,7 +19,7 @@ Root cause: The hosted Supabase "Reset password" email template is still Supabas
 Fix: config change Clark is making. Install `supabase/templates/recovery.html` as the hosted Reset password template (`DEPLOYMENT.md` lines 49–54); its links carry `token_hash` and work on any device. Code hardening in `98179ba`: when the callback gets `?code=` without `token_hash`, it tries `exchangeCodeForSession`. That succeeds in the browser that requested the email, because the verifier cookie is there, and redirects to `/#/set-password`. Otherwise it shows the "expired or already used" page with the added sentence "If you opened this on a different device, open it on the device where you requested it, or request a new link." The live site gets this on its next deployment.
 Test added: `tests/unit.test.js`: "a ?code= reset link opened in the requesting browser signs in through the PKCE exchange" and "a ?code= link opened without the requesting browser's verifier fails with the expired page and a device hint". Also a one-off manual check against the real local GoTrue and Mailpit, using a temporary user that was then deleted: other device gave 400 with the hint, same browser gave 303 to `/#/set-password` with an HttpOnly session cookie.
 
-## BUG-003: Integration test will soon fail its renewal step   (status: noticed)
+## BUG-003: Integration test will soon fail its renewal step   (status: fixed)
 Noticed: 2026-10-10 by Claude, while running `npm run test:integration` (demo workspace). Not reported by Clark.
 What happened: Nothing has failed yet. Each run that finds no unpaid invoice renews the second demo customer one cycle further ahead. That customer now has 7 memberships, the latest ending 2027-05-07.
 Root cause: `tests/integration.js` (the renewal for the second account) always renews after the latest cycle. After about 5 more runs, the next start date passes the 365-day limit in `ff_private.new_membership` and the step fails.
@@ -27,6 +27,13 @@ Fix: none yet; needs a decision. Either the test stops renewing when a future cy
 Test added: none.
 Update 2026-10-10 (Task 06): one more run. The customer now has 8 memberships, the latest ending 2027-06-06, so about 4–5 runs remain at today's date.
 Update 2026-10-13 (Task 13B): the step now fails locally. The isolation customer has 13 memberships, the latest ending 2027-11-03, so the next start is more than a year away: "/renew: Choose a valid start date within the next year." Run without that renewal section, the suite's other 11 checks pass. It still needs a decision. Cleaning up means deleting that local customer's future cycles, invoices and payments, so Claude hasn't done it.
+Decision 2026-10-13 (Clark): change the test so it doesn't renew when a future cycle already exists, and don't delete the local data.
+Fix (`tests/integration.js`):
+- **Renewal:** the test renews the isolation customer only when that customer has no unpaid invoice and no future cycle.
+- **Cross-customer check:** it now uses any of that customer's invoices, so it runs every time. Ownership is checked before any payment rule, so a paid invoice works too.
+- **Payment steps:** without an unpaid invoice, the receipt, approval, overpayment, rejection and full-payment steps print a SKIP line instead.
+- **Locally:** the steps stay skipped until the isolation customer's last future cycle starts (about October 2027). The database suite still checks those payment rules.
+Verified locally: 12 checks pass and one SKIP line, and the customer still has 13 cycles afterwards.
 
 ## BUG-004: `.env.local` defines each DEMO_* email twice   (status: noticed)
 Noticed: 2026-10-10 by Claude. Not reported by Clark.
