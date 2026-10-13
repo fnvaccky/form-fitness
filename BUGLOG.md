@@ -311,7 +311,7 @@ Test added:
 - `tests/paymongo.js`: two foreign signed events get `not_ours`, with payment and checkout counts unchanged; a bad signature stays 401; the old 404 assertion now expects `not_ours`. The early-webhook scenario still settles our unbound checkout.
 Released 2026-10-12: `main` was fast-forwarded to `f9787a1`, and Production deployment `dpl_3iRXwgD8z6SDEZDLvT2vB5V7qSVm` is READY. It queued for about 6 minutes behind the Preview builds. Smoke tests pass, 17 of 17. No migration.
 
-## FEATURE-005: Attendance report, My visits and Visits today   (status: built)
+## FEATURE-005: Attendance report, My visits and Visits today   (status: released)
 Requested: 2026-10-12 by Clark (Task 13). Where: Members → Attendance and the dashboard (staff, admin); the member's home (member).
 Why: check-ins were recorded, but nobody could see them afterwards. The gym had no attendance report, members had no visit history, and the dashboard had no count for today.
 What changed:
@@ -358,6 +358,7 @@ Test added:
   - the twelve server suites;
   - the demo integration and browser suites.
 First release attempt: `main` was fast-forwarded to `f4240c7` and pushed on 2026-10-12 at 15:12 UTC, but no deployment was ever created. Vercel's incident "Increased build and deployment failures" (13:35 to 20:11 UTC, with Git Integrations partly down) dropped the push event, and Production stayed on `dpl_3iRXwgD8z6SDEZDLvT2vB5V7qSVm`. So `main` is fast-forwarded again, to the BUGLOG-only commit that adds this note, to trigger the build.
+Released 2026-10-13 with BUG-015, after Vercel's incident was resolved. `main` was fast-forwarded to `41b1201`, and Production deployment `dpl_Fw1ezbaLKFRab1UMLk7H7TFz53CK` is READY; it built in about 30 seconds. Smoke tests pass, 22 of 22. They include `GET /api/reports/attendance` answering 401 when signed out and with a forged session cookie. The attendance and pass scripts served are identical to the commit. No migration, and no live data was created.
 
 ## BUG-015: The member pass stopped at "Pass expired" instead of refreshing   (status: fixed)
 Found: 2026-10-12 while checking the QR pass end to end (Task 13, Part 4). Where: the member's QR pass screen.
@@ -372,3 +373,4 @@ Fix (`memberQR` in `public/connected.js`):
 Test added:
 - `tests/pass-check.js` (`npm run test:pass`): with the browser clock fast-forwarded, the pass refreshes itself 10 times and then shows "Pass expired". Without the fix, the test fails at the first refresh.
 - The same suite covers the rest of Part 4. It checks pasted text, image upload and camera scans, the already-used and already-recorded passes, refusing unpaid and disabled members, the back camera, and the blocked-camera fallbacks.
+Released 2026-10-13 with FEATURE-005, in Production deployment `dpl_Fw1ezbaLKFRab1UMLk7H7TFz53CK`.
