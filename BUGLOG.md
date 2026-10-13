@@ -26,6 +26,7 @@ Root cause: `tests/integration.js` (the renewal for the second account) always r
 Fix: none yet; needs a decision. Either the test stops renewing when a future cycle already exists, or the demo customer's future cycles are cleaned up periodically.
 Test added: none.
 Update 2026-10-10 (Task 06): one more run. The customer now has 8 memberships, the latest ending 2027-06-06, so about 4–5 runs remain at today's date.
+Update 2026-10-13 (Task 13B): the step now fails locally. The isolation customer has 13 memberships, the latest ending 2027-11-03, so the next start is more than a year away: "/renew: Choose a valid start date within the next year." Run without that renewal section, the suite's other 11 checks pass. It still needs a decision. Cleaning up means deleting that local customer's future cycles, invoices and payments, so Claude hasn't done it.
 
 ## BUG-004: `.env.local` defines each DEMO_* email twice   (status: noticed)
 Noticed: 2026-10-10 by Claude. Not reported by Clark.
@@ -407,3 +408,43 @@ Test added:
   - the self-refresh test now uses a member who hasn't checked in.
 - `tests/browser.js`: the demo customer's pass shows today's check-in once the integration suite has checked them in.
 Released 2026-10-13: `main` was fast-forwarded to `77f9c6a`, and Production deployment `dpl_FNPPzBUsqFBGhihe4Md4T86bGzr4` is READY (built in about 20 seconds). Smoke tests pass, 25 of 25. They include `GET /api/checkin-status` and `GET /api/reports/attendance` answering 401 when signed out and with a forged session cookie, and the served pass and attendance scripts are identical to the commit. No migration, and no live data was created.
+
+## FEATURE-006: Short manual pass code   (status: built)
+Requested: 2026-10-13 by Clark (Task 13 v2, 13B). Where: the member's pass and the staff scanner; roles: member, staff, admin.
+Why: manual entry expected the long signed QR text, which nobody can type. Clark pasted a member id and got "Invalid member pass". When the camera fails, staff need a short code instead.
+What changed:
+- **On the member's pass:** an 8-character Crockford base32 code under the QR, shown as XXXX-XXXX. It has no I, L, O or U, so there are no 0/O or 1/I mix-ups. It is the same pass: it shares the QR's nonce and 90-second life, and refreshes with it.
+- **In the scanner:** "Type the pass code instead" opens a "Pass code" field (e.g. 7KQ2-M9XD). Any case works, with or without the dash or spaces, and O, I and L are read as 0, 1 and 1. Pasted QR text still works in the same field, and image upload is unchanged.
+- **How it checks:** the database looks the code up and returns the member's own signed pass. The scan and check-in that follow are the QR's, unchanged, and the photo-ID tick is still required. A check-in by either the code or the QR uses up both.
+- **Refusals:**
+  - an unknown code: "Pass code not recognised. Check it with the member.";
+  - an expired code: "Code expired — ask the member to refresh their pass";
+  - a used code: "This pass code was already used.";
+  - already checked in today: "Already recorded";
+  - unpaid: no pass, so no code;
+  - disabled: "This membership is inactive."
+- **Brute force:** after 10 wrong codes in 5 minutes, that staff account gets "Too many attempts — wait a few minutes" (429).
+- **Storage** (migration `20261013120000_pass_codes.sql`):
+  - `ff_pass_codes` stores only an HMAC of the code, never the plain code, keyed with the existing pass secret. `ff_pass_code_attempts` records wrong attempts.
+  - Both tables have RLS with no policies and no grants.
+  - `ff_pass_code('issue'|'lookup')` is a security-definer function.
+  - A trigger marks a code used when a check-in records its pass.
+  - Rows are removed a day after they expire.
+Test added:
+- `tests/pass-codes.sql` (39 checks):
+  - members can't read, write or look up codes;
+  - one code per pass, paired with the QR's nonce and expiry; only the hash is stored;
+  - a code for someone else's pass, or a forged pass, is refused;
+  - normalising, and Crockford O/I/L;
+  - another workspace's code isn't recognised;
+  - a code fails after its QR checked the member in, and the QR fails after its code did;
+  - "Already recorded", expired, disabled and unpaid;
+  - the rate limit, and that it's per account and lasts 5 minutes;
+  - housekeeping, uniqueness and grants.
+- `tests/pass-check.js`:
+  - the code is readable under the QR on a phone and changes with each refresh;
+  - staff type it in lower case with a space for the dash, still tick the photo ID, and check the member in;
+  - a wrong code and a used code are refused;
+  - 10 wrong codes through the API, then 429.
+- `tests/unit.test.js`: a typed code goes to the server as a code, and the check-in uses the pass it returns.
+Live steps after "go": push the migration first, then release (fast-forward `main`), then smoke-test.
