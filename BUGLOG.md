@@ -357,6 +357,7 @@ Test added:
   - the four database suites;
   - the twelve server suites;
   - the demo integration and browser suites.
+First release attempt: `main` was fast-forwarded to `f4240c7` and pushed on 2026-10-12 at 15:12 UTC, but no deployment was ever created. Vercel's incident "Increased build and deployment failures" (13:35 to 20:11 UTC, with Git Integrations partly down) dropped the push event, and Production stayed on `dpl_3iRXwgD8z6SDEZDLvT2vB5V7qSVm`. So `main` is fast-forwarded again, to the BUGLOG-only commit that adds this note, to trigger the build.
 
 ## BUG-015: The member pass stopped at "Pass expired" instead of refreshing   (status: fixed)
 Found: 2026-10-12 while checking the QR pass end to end (Task 13, Part 4). Where: the member's QR pass screen.
