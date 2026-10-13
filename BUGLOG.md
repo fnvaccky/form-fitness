@@ -409,7 +409,7 @@ Test added:
 - `tests/browser.js`: the demo customer's pass shows today's check-in once the integration suite has checked them in.
 Released 2026-10-13: `main` was fast-forwarded to `77f9c6a`, and Production deployment `dpl_FNPPzBUsqFBGhihe4Md4T86bGzr4` is READY (built in about 20 seconds). Smoke tests pass, 25 of 25. They include `GET /api/checkin-status` and `GET /api/reports/attendance` answering 401 when signed out and with a forged session cookie, and the served pass and attendance scripts are identical to the commit. No migration, and no live data was created.
 
-## FEATURE-006: Short manual pass code   (status: built)
+## FEATURE-006: Short manual pass code   (status: released)
 Requested: 2026-10-13 by Clark (Task 13 v2, 13B). Where: the member's pass and the staff scanner; roles: member, staff, admin.
 Why: manual entry expected the long signed QR text, which nobody can type. Clark pasted a member id and got "Invalid member pass". When the camera fails, staff need a short code instead.
 What changed:
@@ -448,3 +448,4 @@ Test added:
   - 10 wrong codes through the API, then 429.
 - `tests/unit.test.js`: a typed code goes to the server as a code, and the check-in uses the pass it returns.
 Live steps after "go": push the migration first, then release (fast-forward `main`), then smoke-test.
+Released 2026-10-13 after Clark's "go" (this migration only). The pre-flight dry run and read-only checks matched Gate 1. `supabase db push --linked` applied `20261013120000_pass_codes.sql`; its only warning was the CLI failing to cache its local pg-delta catalog. Then 18 of 18 migrations matched, and the post-push checks found 0 differences from local: tables, constraints, indexes, RLS without policies, grants, function fingerprints and the trigger. Live data was unchanged. `main` was fast-forwarded to `b5649bd`, and Production deployment `dpl_8bVRf7K9cPKB2obXauTCLKfdVqTP` is READY. Smoke tests pass, 29 of 29. No live data was created.
