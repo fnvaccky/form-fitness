@@ -29,7 +29,10 @@ try{
  await page.getByRole('button',{name:'Add member',exact:true}).click();
  const email=`local-onboarding-${randomUUID().slice(0,8)}@example.invalid`;
  await page.getByLabel('Full name *',{exact:true}).fill('LOCAL TEST Onboarding');await page.getByLabel('Email address *',{exact:true}).fill(email);
- await page.getByLabel('Mobile number *',{exact:true}).fill('09170000008');await page.getByLabel('Goal (optional)',{exact:true}).fill('Build strength');
+ await page.getByLabel('Mobile number *',{exact:true}).fill('09170000008');
+ // Task 11: staff fill in the member's fitness survey at the desk, so the member isn't asked for it at first login.
+ await page.getByText('Fitness survey (optional — the member can do it at first login)',{exact:true}).click();
+ await page.locator('#desk-goal').selectOption('Build strength');await page.locator('#desk-experience').selectOption('beginner');await page.locator('#desk-strength').check();await page.locator('#desk-mon').check();
  assert.equal(await page.locator('#member-start').isDisabled(),true,'No start date without a plan');
  await page.locator('#member-plan').selectOption('basic');
  assert.equal(await page.locator('#member-start').isDisabled(),false);assert.equal(await page.locator('#member-start').inputValue(),today());
@@ -43,11 +46,15 @@ try{
  assert.equal(invoice.id,added.invoiceId);assert.equal(invoice.paid_cents,0);assert.equal(invoice.amount_cents,plan.price_cents);
  assert.equal(result(await db.from('ff_payments').select('id').eq('member_id',memberId)).length,0);
  assert.equal(result(await db.from('ff_registrations').select('id').eq('email',email)).length,0,'No first registration any more');
- console.log('PASS: Add member creates the account at once; the plan chosen at the desk is an unpaid invoice, with no payment and no registration');
+ const survey=result(await db.from('ff_member_surveys').select('*').eq('id',memberId).single());
+ assert.deepEqual([survey.experience,survey.exercises,survey.available_days],['beginner',['strength'],['mon']],'the desk survey is saved with the account');
+ assert.equal(result(await db.from('ff_profiles').select('goal').eq('id',memberId).single()).goal,'Build strength');
+ console.log('PASS: Add member creates the account at once, with the fitness survey filled in at the desk; the plan chosen at the desk is an unpaid invoice, with no payment and no registration');
  const mail=await mailFor(email);assert(mail,'Setup email captured locally');
  const match=mail.HTML.match(/href="([^"]*token_hash=[^"]+)"/);assert(match,'Token-hash setup link');const link=match[1].replaceAll('&amp;','&');assert(link.startsWith(origin+'/api/auth/callback?'));
  const memberPage=await browser.newPage();await memberPage.goto(link);await memberPage.getByLabel('New password *',{exact:true}).fill('LocalOnboarding2026!');await memberPage.getByRole('button',{name:'Save password',exact:true}).click();
  const bar=memberPage.locator('.member-pass-bar');await bar.waitFor();
+ assert.equal(await memberPage.locator('.survey-first').count(),0,'a desk-filled survey means no survey screen at first login');
  assert.match(await bar.innerText(),/Your membership starts after full payment/);
  assert.equal(await memberPage.getByRole('button',{name:'Show my member QR',exact:true}).count(),0,'No pass button before payment');
  assert.equal(await memberPage.getByRole('button',{name:'Pay now',exact:true}).count(),1);

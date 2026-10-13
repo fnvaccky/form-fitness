@@ -16,9 +16,11 @@ assert(['localhost','127.0.0.1'].includes(new URL(process.env.SUPABASE_URL).host
 // All credentials are generated in memory; mock transport never contacts PayMongo.
 const env={...process.env,APP_WORKSPACE:'production',PAYMONGO_ALLOW_LIVE:'false',PAYMONGO_SECRET_KEY:'sk_test_'+randomBytes(24).toString('hex'),PAYMONGO_WEBHOOK_SECRET:randomBytes(32).toString('hex'),GMAIL_ADDRESS:'',GMAIL_APP_PASSWORD:''};
 const db=serviceClient(env),fixtures=[],extraRegistrations=[];
+// Task 11: fixture members come with their fitness survey (as if filled in at the desk), so they skip the first-login survey.
+const SURVEY={experience:'regular',exercises:['strength'],availableDays:['mon']};
 async function fixture(role){
  const email='paymongo-'+role+'-'+randomUUID()+'@example.invalid',password='Local9!'+randomBytes(24).toString('base64url');
- const {data,error}=await db.auth.admin.createUser({email,password,email_confirm:true,app_metadata:{ff_workspace:'production',ff_role:role},user_metadata:{form_fitness:true,name:'LOCAL TEST '+role,phone:'09170000004',plan:'basic',start:today()}});assert.ifError(error);
+ const {data,error}=await db.auth.admin.createUser({email,password,email_confirm:true,app_metadata:{ff_workspace:'production',ff_role:role},user_metadata:{form_fitness:true,name:'LOCAL TEST '+role,phone:'09170000004',plan:'basic',start:today(),...(role==='member'?{survey:SURVEY}:{})}});assert.ifError(error);
  fixtures.push(data.user.id);return {id:data.user.id,email,password};
 }
 let staff,admin,other;
@@ -107,6 +109,8 @@ try{
  // The member pays an invoice directly; an uncertain create never results in a replacement session.
  const end=result(await db.from('ff_memberships').select('end_date').eq('member_id',memberId).order('end_date',{ascending:false}).limit(1).single()).end_date;
  const start=new Date(end+'T12:00:00Z');start.setUTCDate(start.getUTCDate()+1);
+ // Task 11: a member answers the fitness survey before choosing a plan (this one was made the old paid-first way).
+ await call('/member-survey',{goal:'Improve fitness',experience:'regular',exercises:['strength'],availableDays:['mon']});
  const ownInvoice=await call('/renew',{plan:'basic',start:start.toISOString().slice(0,10)});
  const ownRequest={kind:'invoice',invoiceId:ownInvoice.invoiceId,method:'card',requestId:randomUUID()};providerFailure=true;await call('/paymongo/checkout',ownRequest,502);providerFailure=false;
  const uncertain=await call('/paymongo/checkout',ownRequest);assert.equal(uncertain.checkout.status,'needs_review');const createdCount=count;

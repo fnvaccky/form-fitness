@@ -2,6 +2,7 @@ import { allRows, result } from './supabase.js';
 import { today } from './validation.js';
 import {paymongoConfiguration} from './paymongo-config.js';
 import {manilaClock} from './attendance.js';
+import {surveyView} from './survey.js';
 export const BUCKET = 'form-fitness-private';
 const datePH = value => new Date(new Date(value).getTime() + 8 * 3600000).toISOString().slice(0,10);
 export const paymentView = p => ({ id:p.id, invoiceId:p.invoice_id, memberId:p.member_id, amount:p.amount_cents/100, amountCents:p.amount_cents, method:p.method, reference:p.reference, date:p.payment_date });
@@ -28,7 +29,7 @@ export async function stateFor(client, profile, env) {
   const current = today(), gymStaff = ['admin','staff'].includes(profile.role);
   // A member's own latest visits (RLS limits members to their own rows anyway); staff get the workspace's.
   const recentCheckins = profile.role==='member' ? client.from('ff_checkins').select('*').eq('member_id',profile.id) : client.from('ff_checkins').select('*');
-  const [profiles, cycles, invoices, payments, submissions, checkins, plans, settings, outbox, registrations, checkouts, unpaidAccounts, visitsToday] = await Promise.all([
+  const [profiles, cycles, invoices, payments, submissions, checkins, plans, settings, outbox, registrations, checkouts, unpaidAccounts, visitsToday, surveys] = await Promise.all([
     allRows(client,'ff_profiles'), allRows(client,'ff_memberships'), allRows(client,'ff_invoices'), allRows(client,'ff_payments'), allRows(client,'ff_submissions'),
     recentCheckins.order('created_at',{ascending:false}).limit(50).then(result),
     client.from('ff_plans').select('*').order('price_cents').then(result),
@@ -39,12 +40,15 @@ export async function stateFor(client, profile, env) {
     // Task 10: never-paid member accounts, for the administrators' Unpaid accounts tab.
     profile.role==='admin' ? client.rpc('ff_account_cleanup',{action:'list',body:{}}).then(result) : undefined,
     // Task 13: today's visits for the staff dashboard, an exact count without fetching rows.
-    gymStaff ? client.from('ff_checkins').select('id',{count:'exact',head:true}).eq('checkin_date',current).then(response=>{result(response);return response.count??0;}) : undefined
+    gymStaff ? client.from('ff_checkins').select('id',{count:'exact',head:true}).eq('checkin_date',current).then(response=>{result(response);return response.count??0;}) : undefined,
+    // Task 11: fitness surveys (a member reads their own; staff read their workspace's).
+    allRows(client,'ff_member_surveys')
   ]);
+  const surveyByMember = new Map(surveys.map(row=>[row.id,surveyView(row)]));
   const members = await Promise.all(profiles.filter(p=>p.role==='member').map(async p=> {
     const own = cycles.filter(c=>c.member_id===p.id).sort((a,b)=>a.start_date.localeCompare(b.start_date));
     const cycle = own.find(c=>c.start_date<=current && c.end_date>=current) || own.find(c=>c.start_date>current) || own.at(-1);
-    return { id:p.id,name:p.name,email:p.email,phone:p.phone,goal:p.goal,enabled:p.enabled,photo:await signedImage(client,p.photo),photoPath:p.photo,plan:cycle?.plan_id,start:cycle?.start_date,end:cycle?.end_date,joined:datePH(p.created_at) };
+    return { id:p.id,name:p.name,email:p.email,phone:p.phone,goal:p.goal,survey:surveyByMember.get(p.id)||null,enabled:p.enabled,photo:await signedImage(client,p.photo),photoPath:p.photo,plan:cycle?.plan_id,start:cycle?.start_date,end:cycle?.end_date,joined:datePH(p.created_at) };
   }));
   const destinations = {};
   for (const [key, value] of Object.entries(settings.payments || {})) destinations[key] = {...value,imagePath:value.image,image:await signedImage(client,value.image)};

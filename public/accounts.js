@@ -9,7 +9,7 @@ let addMemberPlan='';
 document.addEventListener('click',event=>{const el=event.target.closest('[data-action="register"]');if(el)addMemberPlan=el.dataset.plan||'';},true);
 register=function(){
  const today=DEMO_DATE;
- openModal('Add member','Create the member’s account now. They set their own password from the setup email.',`<form id="member-create-form"><div class="form-grid">${field('Full name *','member-name','','text','required minlength="2" maxlength="70" autocomplete="off"')}${field('Email address *','member-email','','email','required maxlength="100" autocomplete="off"')}${field('Mobile number *','member-phone','','tel','required autocomplete="off"','Required · 09XXXXXXXXX or +639XXXXXXXXX')}${field('Goal (optional)','member-goal','','text','maxlength="100" autocomplete="off"')}<div class="field"><label for="member-plan">Plan (optional)</label><select id="member-plan"><option value="">No plan yet: the member chooses after signing in</option>${plans.filter(p=>p.available!==false).map(p=>`<option value="${esc(p.id)}">${esc(p.name)} · ${money(p.price)}</option>`).join('')}</select></div>${field('Start date','member-start',today,'date',`min="${today}" max="${addDays(today,365)}" disabled`)}</div><div class="notice">The account works right away. Membership and the member pass start only after full payment.</div><div class="form-error" role="alert"></div></form>`,`${btn('Cancel','close')}<div class="right"><button class="button primary" type="submit" form="member-create-form">Create account</button></div>`);
+ openModal('Add member','Create the member’s account now. They set their own password from the setup email.',`<form id="member-create-form"><div class="form-grid">${field('Full name *','member-name','','text','required minlength="2" maxlength="70" autocomplete="off"')}${field('Email address *','member-email','','email','required maxlength="100" autocomplete="off"')}${field('Mobile number *','member-phone','','tel','required autocomplete="off"','Required · 09XXXXXXXXX or +639XXXXXXXXX')}<div class="field"><label for="member-plan">Plan (optional)</label><select id="member-plan"><option value="">No plan yet: the member chooses after signing in</option>${plans.filter(p=>p.available!==false).map(p=>`<option value="${esc(p.id)}">${esc(p.name)} · ${money(p.price)}</option>`).join('')}</select></div>${field('Start date','member-start',today,'date',`min="${today}" max="${addDays(today,365)}" disabled`)}${deskSurveySection()}</div><div class="notice">The account works right away. Membership and the member pass start only after full payment.</div><div class="form-error" role="alert"></div></form>`,`${btn('Cancel','close')}<div class="right"><button class="button primary" type="submit" form="member-create-form">Create account</button></div>`);
  const plan=document.getElementById('member-plan'),start=document.getElementById('member-start');
  const update=()=>{start.disabled=!plan.value;start.required=!!plan.value;};
  if([...plan.options].some(o=>o.value&&o.value===addMemberPlan))plan.value=addMemberPlan;
@@ -26,7 +26,9 @@ document.addEventListener('submit',event=>{
  return runForm(form,async()=>{
   const value=id=>document.getElementById(id).value,name=value('member-name'),email=value('member-email'),phone=value('member-phone');
   validateContactFields(name,email,phone);
-  const body={name,email,phone,goal:value('member-goal').trim()},plan=value('member-plan');
+  // Task 11: the fitness survey, if staff filled it in with the member; its goal becomes the account's goal.
+  const survey=deskSurveyAnswers(),body={name,email,phone},plan=value('member-plan');
+  if(survey){const {goal,...answers}=survey;Object.assign(body,{goal,survey:answers});}
   if(plan){if(!value('member-start'))throw Error('Choose a start date for the plan.');Object.assign(body,{plan,start:value('member-start')});}
   const response=await api('/members',body);
   await refreshData();memberCreatedModal(response);

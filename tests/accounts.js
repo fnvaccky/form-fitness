@@ -69,8 +69,10 @@ async function account(workspace,role){
  const {data,error}=await db.auth.admin.createUser({email,password,email_confirm:true,app_metadata:{ff_workspace:workspace,ff_role:role},user_metadata:{form_fitness:true,name:'LOCAL TEST Accounts '+role,phone:'09170000070'}});
  assert.ifError(error);users.push(data.user.id);return {id:data.user.id,email,password};
 }
+// Task 11: Add member sends a desk survey here unless a test passes survey:undefined, so these members skip the first-login survey.
+const SURVEY={experience:'regular',exercises:['strength'],availableDays:['mon']};
 async function addMember(api,label,extra={}){
- const added=await api.post('/members',{name:'LOCAL TEST '+label,email:`accounts-${label}-${randomUUID().slice(0,8)}@example.invalid`,phone:'09170000071',...extra},201);
+ const added=await api.post('/members',{name:'LOCAL TEST '+label,email:`accounts-${label}-${randomUUID().slice(0,8)}@example.invalid`,phone:'09170000071',goal:'Improve fitness',survey:SURVEY,...extra},201);
  users.push(added.member.id);return {...added.member,invoiceId:added.invoiceId,setupEmailSent:added.setupEmailSent};
 }
 async function memberSession(origin,member){

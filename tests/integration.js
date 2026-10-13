@@ -19,6 +19,8 @@ let originalPayments;
 try{
   for(const [ctx,a] of [[admin,adminAccount],[customer,customerAccount],[other,otherAccount]])await call(ctx,'/login',{email:a.email,password:a.password});
   assert.equal((await call(admin,'/session')).user.role,'admin');assert.equal((await call(customer,'/session')).user.role,'member');passed('Real Supabase admin and both customer sign-ins');
+  // Task 11: members answer the fitness survey before choosing a plan. Saving it again just updates it.
+  for(const ctx of [customer,other])await call(ctx,'/member-survey',{goal:'Stay consistent',experience:'regular',exercises:['strength','cardio'],availableDays:['mon','thu']});
   assert.equal((await anonymous.get('/api/state')).status(),401);
   assert.equal((await customer.post('/api/payments',{data:{}})).status(),403);
   assert.equal((await customer.post('/api/owner-login',{headers:{'oai-authenticated-user-id':adminAccount.id},data:{}})).status(),404);passed('Anonymous, forged owner header and member-to-admin API access denied');

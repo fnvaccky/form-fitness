@@ -2,6 +2,7 @@ import {randomBytes} from 'node:crypto';
 import {serviceClient,result} from './supabase.js';
 import {fail,contacts,startDate} from './validation.js';
 import {sendSetupLink} from './staff.js';
+import {deskSurvey} from './survey.js';
 // Task 10: account-first registration. Gym staff create the member's account at once, with no plan
 // needed; the member sets their own password from the same setup link staff get, then chooses a plan and
 // pays online or at the desk. ff_private.member_admin checks the role and the email in the database first.
@@ -11,13 +12,15 @@ export async function createMember(client,body,env,origin){
   if(key in body)fail('Accounts created here are always members, and members set their own password. Remove that field and try again.');
  const info=contacts(body),goal=String(body.goal??'').trim();
  if(goal.length>100||/[<>\r\n]/.test(goal))fail('Keep the goal under 100 characters, without special characters.');
+ // Task 11: a fitness survey filled in at the desk is saved with the account, so it is checked before anything else.
+ const survey=deskSurvey(goal,body.survey);
  const plan=String(body.plan??'').trim();
  if(plan)startDate(body.start);
  const prepared=result(await client.rpc('ff_member_admin',{action:'prepare-create',body:{email:info.email}}));
  // SQL can't create a proper Auth user. register_auth_user turns this one into a member profile with no
  // plan yet. Nobody ever sees the throwaway password.
  const {data,error}=await serviceClient(env).auth.admin.createUser({email:prepared.email,password:'Member9!'+randomBytes(32).toString('base64url'),email_confirm:true,
-  app_metadata:{ff_workspace:prepared.workspace,ff_role:'member'},user_metadata:{form_fitness:true,name:info.name,phone:info.phone,goal}});
+  app_metadata:{ff_workspace:prepared.workspace,ff_role:'member'},user_metadata:{form_fitness:true,name:info.name,phone:info.phone,goal,...(survey?{survey}:{})}});
  if(error){
   if(error.code==='email_exists'||/already (been )?registered|already exists/i.test(error.message||''))fail('An account already uses this email.',409);
   // A simultaneous Add member for the same email loses inside the Auth trigger, which GoTrue reports only

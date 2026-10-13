@@ -13,13 +13,15 @@ const page=await context.newPage();const errors=[],checks=[];
 page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error'&&!m.text().includes('status of 400')&&!m.text().includes('status of 401')&&!m.location().url.includes('/_vercel/insights/'))errors.push(m.text());});
 const pass=s=>{checks.push(s);console.log('PASS: '+s);};
 const heading=async name=>{await page.getByRole('heading',{name,exact:true}).waitFor();};
+// Task 11: a member without a fitness survey is asked for it first; answer it if this demo customer hasn't yet.
+const answerSurveyIfAsked=async()=>{await page.locator('.survey-first,.page-heading').first().waitFor();if(await page.locator('.survey-first').count()){await page.getByLabel('How familiar are you with training?',{exact:true}).selectOption('regular');await page.getByLabel('Strength training',{exact:true}).check();await page.getByLabel('Monday',{exact:true}).check();await page.getByRole('button',{name:'Save my answers',exact:true}).click();await page.locator('.survey-first').waitFor({state:'detached'});}};
 const login=async a=>{await page.getByLabel('Email address',{exact:true}).fill(a.email);await page.getByLabel('Password',{exact:true}).fill(a.password);await page.getByRole('button',{name:'Log in',exact:true}).click();};
 await mkdir('test-results',{recursive:true});
 try{
  await page.goto(origin);await heading('Good to see you.');
  assert.equal(await page.getByRole('button',{name:'Create a member account',exact:true}).count(),0);pass('First registration is staff-assisted; public signup is unavailable');
  await page.getByRole('button',{name:'Forgot your password?',exact:true}).click();await page.getByLabel('Email address *',{exact:true}).waitFor();await page.keyboard.press('Escape');pass('Password recovery UI opens without sending mail to a test address');
- await login(memberAccount);await heading('Your next chapter, DEMO.');
+ await login(memberAccount);await answerSurveyIfAsked();await heading('Your next chapter, DEMO.');
  assert.equal(await page.getByRole('button',{name:'Admin view',exact:true}).count(),0);await page.screenshot({animations:'disabled',path:'test-results/member-desktop.png'});pass('Real customer login renders dashboard with no admin controls');
  await page.reload();await heading('Your next chapter, DEMO.');pass('Browser reload restores the Supabase session');
  // 13A: once the member has checked in today (the integration suite checks the demo customer in), the pass shows that instead of a QR.

@@ -14,3 +14,5 @@ artifacts/
 supabase/.temp/
 supabase/.branches/
 .impeccable/
+# Task 11: incoming third-party work (e.g. the classmate's survey zip); never commit it.
+_incoming/

@@ -35,10 +35,12 @@ function client(){
  };
  return {post:(e,b,s=200)=>send('POST',e,b,s),get:(e,s=200)=>send('GET',e,undefined,s)};
 }
+// Task 11: fixture members come with their fitness survey (as if filled in at the desk), so they skip the first-login survey.
+const SURVEY={experience:'regular',exercises:['strength'],availableDays:['mon']};
 async function account(role,name,plan){
  const email=`pass-${role}-${randomUUID().slice(0,8)}@example.invalid`,password='Local9!'+randomBytes(24).toString('base64url');
  const {data,error}=await db.auth.admin.createUser({email,password,email_confirm:true,app_metadata:{ff_workspace:'production',...(role==='member'?{}:{ff_role:role})},
-  user_metadata:{form_fitness:true,name,phone:'09170000090',...(plan?{plan,start:today()}:{})}});
+  user_metadata:{form_fitness:true,name,phone:'09170000090',...(plan?{plan,start:today()}:{}),...(role==='member'?{survey:SURVEY}:{})}});
  assert.ifError(error);users.push(data.user.id);return {id:data.user.id,email,password,name};
 }
 // A raw YUV video (Y4M) of a QR code, for Edge's fake camera. The QR fits inside the scanner's centre scan region.

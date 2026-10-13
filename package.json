@@ -26,6 +26,8 @@
     "test:reset": "node --env-file-if-exists=.env.local tests/reset-test-data.js",
     "test:attendance": "node --env-file-if-exists=.env.local tests/attendance.js",
     "test:pass": "node --env-file-if-exists=.env.local tests/pass-check.js",
+    "test:survey": "node tests/survey-browser.js",
+    "test:survey-flow": "node --env-file-if-exists=.env.local tests/survey.js",
     "reset:test-data": "node --env-file-if-exists=.env.local scripts/reset-test-data.js"
   },
   "engines": {

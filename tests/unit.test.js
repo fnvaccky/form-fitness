@@ -672,6 +672,81 @@ test('a plan chosen at the desk becomes an unpaid invoice through the renew path
   assert.deepEqual(staff.state.requests.find(r=>r.path==='/rest/v1/rpc/ff_command').body,{action:'renew',body:{memberId,plan:'basic',start}});
  }finally{staff.close();}
 });
+// Task 11: the member fitness survey. The first three tests are a classmate's (fitness-survey-update.zip), ported.
+test('member survey validates every answer and refuses identity overrides',async()=>{
+  const {validateSurvey}=await import('../src/survey.js');
+  const valid={goal:'Build strength',experience:'returning',exercises:['cardio','strength'],availableDays:['fri','mon']};
+  assert.deepEqual(validateSurvey(valid),{...valid,exercises:['strength','cardio'],availableDays:['mon','fri']});
+  for(const changes of [{goal:''},{goal:'<script>'},{experience:'expert'},{exercises:[]},{exercises:'strength'},{exercises:[null]},{exercises:['yoga']},{exercises:['strength','strength']},{availableDays:[]},{availableDays:['monday']},{availableDays:['mon','mon']},{availableDays:[1]},{memberId:'another-member'},{workspace:'demo'}]){
+    assert.throws(()=>validateSurvey({...valid,...changes}),{status:400},JSON.stringify(changes));
+  }
+  for(const invalid of [null,[],true,'text',{}])assert.throws(()=>validateSurvey(invalid));
+});
+const surveyRpc={'/rest/v1/rpc/ff_save_member_survey':(req,res)=>{const answers=req.body.body;res.end(JSON.stringify({id:'11111111-2222-3333-4444-555555555503',workspace:'production',experience:answers.experience,exercises:answers.exercises,available_days:answers.availableDays,updated_at:'2026-10-10T06:30:00Z'}));}};
+test('survey API saves member answers through the scoped RPC and returns a safe view',async()=>{
+  const member=await consoleSession('member',{routes:surveyRpc});
+  try{
+    const answers={goal:'Build strength',experience:'beginner',exercises:['strength'],availableDays:['mon','fri']};
+    const response=await member.post('/member-survey',answers);
+    assert.equal(response.status,200);
+    assert.deepEqual(await response.json(),{goal:answers.goal,survey:{experience:'beginner',exercises:['strength'],availableDays:['mon','fri'],updatedAt:'2026-10-10T06:30:00Z'}});
+    const call=member.state.requests.find(r=>r.path==='/rest/v1/rpc/ff_save_member_survey');
+    assert.deepEqual(call.body,{body:answers},'no member id or workspace is supplied by the browser');
+    for(const changes of [{availableDays:[]},{memberId:'another-member'},{workspace:'demo'}]){
+      assert.equal((await member.post('/member-survey',{...answers,...changes})).status,400);
+    }
+    assert.equal(member.state.requests.filter(r=>r.path==='/rest/v1/rpc/ff_save_member_survey').length,1,'invalid answers never reach the save RPC');
+  }finally{member.close();}
+});
+test('staff and administrators cannot overwrite a member survey',async()=>{
+  for(const role of ['staff','admin']){
+    const session=await consoleSession(role,{routes:surveyRpc});
+    try{
+      assert.equal((await session.post('/member-survey',{goal:'Build strength',experience:'beginner',exercises:['cardio'],availableDays:['mon']})).status,403);
+      assert.equal(session.state.requests.some(r=>r.path==='/rest/v1/rpc/ff_save_member_survey'),false);
+    }finally{session.close();}
+  }
+});
+test('Task 11: until a member saves their survey, they cannot choose a plan or start an online checkout; staff are never blocked',async()=>{
+  const surveys=[],start=new Date(Date.now()+8*3600000).toISOString().slice(0,10);
+  const member=await consoleSession('member',{routes:{'/rest/v1/ff_member_surveys':(req,res)=>res.end(JSON.stringify(surveys))}});
+  try{
+    for(const [path,body] of [['/renew',{plan:'basic',start}],['/paymongo/checkout',{invoiceId:'99999999-0000-0000-0000-000000000012',methods:['gcash']}]]){
+      const response=await member.post(path,body);
+      assert.equal(response.status,403,path);assert.equal((await response.json()).error,'Complete your fitness survey first.',path);
+    }
+    assert(!member.state.requests.some(r=>r.path==='/rest/v1/rpc/ff_command'||r.path.startsWith('/rest/v1/ff_checkouts')||r.path.startsWith('/rest/v1/ff_invoices')),'nothing is created or looked up');
+    surveys.push({id:member.state.profile.id});
+    assert.equal((await member.post('/renew',{plan:'basic',start})).status,200,'once the survey is saved, the plan selection goes through');
+    assert(member.state.requests.some(r=>r.path==='/rest/v1/rpc/ff_command'));
+  }finally{member.close();}
+  const staff=await consoleSession('staff',{routes:{'/rest/v1/ff_member_surveys':(req,res)=>res.end('[]')}});
+  try{
+    assert.equal((await staff.post('/renew',{memberId:'99999999-0000-0000-0000-000000000013',plan:'basic',start})).status,200,'staff renew for a member without being asked about surveys');
+    assert.equal(staff.state.requests.some(r=>r.path==='/rest/v1/ff_member_surveys'),false);
+  }finally{staff.close();}
+});
+test('Task 11: a survey filled in at the desk goes into the new account, checked before the account is made',async()=>{
+  const memberId='99999999-0000-0000-0000-000000000014';
+  const staff=await consoleSession('staff',{routes:{
+    '/rest/v1/rpc/ff_member_admin':(req,res)=>res.end(JSON.stringify({email:req.body.body.email,workspace:'production'})),
+    '/auth/v1/admin/users':(req,res)=>res.end(JSON.stringify({id:memberId,aud:'authenticated',role:'authenticated',email:req.body.email,app_metadata:req.body.app_metadata,user_metadata:req.body.user_metadata,created_at:new Date().toISOString()})),
+    '/auth/v1/recover':(req,res)=>res.end('{}')}});
+  try{
+    const base={name:'Desk Member',email:'desk-member@example.invalid',phone:'09170000014',goal:'Build strength'};
+    const survey={experience:'beginner',exercises:['cardio','strength'],availableDays:['fri','mon']};
+    const response=await staff.post('/members',{...base,survey}),value=await response.json();
+    assert.equal(response.status,201,value.error);
+    const created=staff.state.requests.find(r=>r.path==='/auth/v1/admin/users');
+    assert.deepEqual(created.body.user_metadata,{form_fitness:true,name:'Desk Member',phone:'09170000014',goal:'Build strength',survey:{experience:'beginner',exercises:['strength','cardio'],availableDays:['mon','fri']}},'the database saves it with the account');
+    const before=staff.state.requests.length;
+    for(const [label,body] of [['a goal outside the four',{...base,goal:'Get stronger',survey}],['no exercise',{...base,survey:{...survey,exercises:[]}}],
+      ['an extra field',{...base,survey:{...survey,memberId:'x'}}],['a goal inside the survey',{...base,survey:{...survey,goal:'Manage weight'}}],['not an object',{...base,survey:'yes'}]]){
+      assert.equal((await staff.post('/members',body)).status,400,label);
+    }
+    assert(!staff.state.requests.slice(before).some(r=>r.path==='/auth/v1/admin/users'),'a bad survey is refused before the account is made');
+  }finally{staff.close();}
+});
 test('BUG-014: a verified paid event for a checkout that is not ours gets 200 not_ours and records nothing; ours never does',async()=>{
  const {createHmac,randomBytes}=await import('node:crypto');
  const secret=randomBytes(32).toString('hex');

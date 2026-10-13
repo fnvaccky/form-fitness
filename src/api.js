@@ -7,6 +7,7 @@ import {createCheckout,reconcileCheckout,recoverCheckout,cancelCheckout,handleWe
 import {createStaff,updateStaff,setStaffEnabled,resendStaffSetup} from './staff.js';
 import {createMember} from './members.js';
 import {attendanceReport,checkinStatus} from './attendance.js';
+import {validateSurvey,surveyView} from './survey.js';
 import {deleteUnpaidAccount,runAutomaticCleanup,cronAuthorized} from './cleanup.js';
 import { flushEmails } from './notifications.js';
 
@@ -152,6 +153,17 @@ export async function handle(req,res,env=process.env) {
     // Task 13: attendance for gym staff, read through the caller's session (RLS keeps it to their workspace).
     if(path==='/reports/attendance' && req.method==='GET'){gymStaff();return send(res,200,await attendanceReport(client,Object.fromEntries(url.searchParams),today()));}
     if(req.method!=='POST')fail('Endpoint not found.',404);
+    // Task 11: a member's fitness survey comes first. The screen asks for it at first login; this keeps it from being
+    // skipped: no plan selection or online checkout until it is saved. Staff and administrators are never asked.
+    if(profile.role==='member' && (path==='/renew'||path==='/paymongo/checkout') && !result(await client.from('ff_member_surveys').select('id').eq('id',profile.id).maybeSingle()))
+      fail('Complete your fitness survey first.',403);
+    // Task 11 (from a classmate's survey work): members save their own answers through the session-scoped function.
+    if(path==='/member-survey') {
+      if(profile.role!=='member')fail('Only members can save their own survey.',403);
+      const answers=validateSurvey(body);
+      const saved=result(await client.rpc('ff_save_member_survey',{body:answers}));
+      return send(res,200,{goal:answers.goal,survey:surveyView(saved)});
+    }
     if(path==='/staff'){admin();return send(res,201,await createStaff(client,body,env,origin));}
     if(path==='/staff/update'){admin();return send(res,200,await updateStaff(client,body));}
     if(path==='/staff/enable'){admin();return send(res,200,await setStaffEnabled(client,body));}
