@@ -406,3 +406,4 @@ Test added:
   - the screen checks about every 3 seconds, and not at all while the tab is hidden or after it closes;
   - the self-refresh test now uses a member who hasn't checked in.
 - `tests/browser.js`: the demo customer's pass shows today's check-in once the integration suite has checked them in.
+Released 2026-10-13: `main` was fast-forwarded to `77f9c6a`, and Production deployment `dpl_FNPPzBUsqFBGhihe4Md4T86bGzr4` is READY (built in about 20 seconds). Smoke tests pass, 25 of 25. They include `GET /api/checkin-status` and `GET /api/reports/attendance` answering 401 when signed out and with a forged session cookie, and the served pass and attendance scripts are identical to the commit. No migration, and no live data was created.
