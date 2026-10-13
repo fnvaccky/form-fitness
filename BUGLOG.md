@@ -479,6 +479,7 @@ What changed:
 - **At the desk:** Add member has an optional, collapsible "Fitness survey (optional — the member can do it at first login)" section with the same questions, replacing the free-text goal field. Filled in, it is saved with the account in the same transaction (`register_auth_user`). Afterwards only the member changes it.
 - **Later:** My membership → "Your fitness profile", with Edit and Cancel.
 - **Staff view:** the answers, read-only, in the member overview.
+- **Paid members aren't stopped (Clark, 14 Oct, before release):** only a member with no paid current or upcoming cycle gets the full-screen survey. A paid member (like John) keeps the overview, pass, pass code, check-in status and My visits. A card at the top of the overview and My membership says "Complete your fitness profile — it takes a minute and helps us recommend the right plan", with a button to the survey. The renew screen explains why choosing the next plan waits for it, links to it and keeps its button disabled, and the API still refuses renewal and checkout until it is saved.
 - **After the first save:** "Thanks! Choose your plan next." and plan selection. `recommendPlans(survey, plans)` is the hook for Task 12, and suggests nothing yet.
 - **Clean-up:** a survey goes with its profile (`on delete cascade`), so Task 10's clean-up of a never-paid account removes it, and so does the test-data reset.
 - **Migration** `20261013180000_member_survey.sql`:
