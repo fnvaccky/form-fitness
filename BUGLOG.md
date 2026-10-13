@@ -459,3 +459,50 @@ Test added:
 Live steps after "go": push the migration first, then release (fast-forward `main`), then smoke-test.
 Released 2026-10-13 after Clark's "go" (this migration only). The pre-flight dry run and read-only checks matched Gate 1. `supabase db push --linked` applied `20261013120000_pass_codes.sql`; its only warning was the CLI failing to cache its local pg-delta catalog. Then 18 of 18 migrations matched, and the post-push checks found 0 differences from local: tables, constraints, indexes, RLS without policies, grants, function fingerprints and the trigger. Live data was unchanged. `main` was fast-forwarded to `b5649bd`, and Production deployment `dpl_8bVRf7K9cPKB2obXauTCLKfdVqTP` is READY. Smoke tests pass, 29 of 29. No live data was created.
 A minute later, the repo owner merged PR #1 (Vercel Web Analytics) into `main` (`5316dd8`). Production is now `dpl_5wyCGB5VgnFouHnPAnHjn6iYkrk6`, which includes this release, and the smoke tests pass against it too, 29 of 29. `main` was merged into `clark-changes` (`d04d097`) so that releases can stay fast-forwards.
+
+## FEATURE-007: Member fitness survey, required at first login   (status: built)
+Requested: 2026-10-13 by Clark (Task 11). Where: the member's first sign-in, My membership, Add member, and the staff's member overview; roles: member, staff, admin. (The task file says FEATURE-004, but Task 10 took that number first.)
+Credit: built on a classmate's survey work (`fitness-survey-update.zip`, made against `main` `ed44803`). It included:
+- the `ff_member_surveys` table and its RLS, and `ff_save_member_survey`;
+- the checks in `src/survey.js`;
+- `public/member-survey.js` and `.css`: the form, its error summary and focus handling, edit and cancel, and the staff's read-only view;
+- a boot fix that restores a reloaded page's address;
+- database, unit and browser tests.
+
+Their full copies of the shared files were not used, because they would have undone later work. Only the survey parts were ported by hand. The zip stays out of git (`_incoming/` is in `.gitignore`).
+What changed:
+- **Four questions:** main goal (the existing profile goal), training experience, exercise preferences and usual days. No medical data.
+- **Required at first login:**
+  - A member without a survey sees only the survey after signing in, with a short welcome and Sign out, and no skip.
+  - The API refuses a member's plan selection (`/api/renew`) and online checkout (`/api/paymongo/checkout`) with 403 "Complete your fitness survey first." until it is saved.
+  - Staff and administrators are never asked.
+- **At the desk:** Add member has an optional, collapsible "Fitness survey (optional — the member can do it at first login)" section with the same questions, replacing the free-text goal field. Filled in, it is saved with the account in the same transaction (`register_auth_user`). Afterwards only the member changes it.
+- **Later:** My membership → "Your fitness profile", with Edit and Cancel.
+- **Staff view:** the answers, read-only, in the member overview.
+- **After the first save:** "Thanks! Choose your plan next." and plan selection. `recommendPlans(survey, plans)` is the hook for Task 12, and suggests nothing yet.
+- **Clean-up:** a survey goes with its profile (`on delete cascade`), so Task 10's clean-up of a never-paid account removes it, and so does the test-data reset.
+- **Migration** `20261013180000_member_survey.sql`:
+  - the table, RLS and read policy;
+  - `ff_private.survey_answers` (the shared checks);
+  - `ff_save_member_survey`;
+  - `register_auth_user`, which is Task 10's version plus the desk survey.
+Test added:
+- `tests/survey-database.sql` (47 checks):
+  - the classmate's checks on the current schema;
+  - the desk survey saved with the account, while an invalid one stops the account;
+  - only members get one;
+  - staff and administrators can't save;
+  - the clean-up removes the survey.
+- `tests/survey-browser.js` (`npm run test:survey`, offline): the first-login screen, the checks, failed-save recovery, double submit, thanks and plan selection, editing and cancelling, 390 and 320 px layouts, the staff view, and the desk section.
+- `tests/survey.js` (`npm run test:survey-flow`, real stack, desktop and phone):
+  - the 403s, while staff aren't blocked;
+  - survey, thanks, plan selection and the first invoice;
+  - a desk survey means no prompt;
+  - staff can't edit;
+  - members read only their own;
+  - the clean-up removes the survey.
+- `tests/unit.test.js`: the classmate's three tests, plus the gate and the desk survey.
+- Existing suites:
+  - Fixture members come with a survey, as if filled in at the desk.
+  - The onboarding test fills in the desk survey.
+  - The demo suites save their customers' surveys.
