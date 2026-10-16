@@ -508,3 +508,19 @@ Test added:
   - The onboarding test fills in the desk survey.
   - The demo suites save their customers' surveys.
 Released 2026-10-14 after Clark's "go" (this migration only), with the paid-member routing he asked for first. The pre-flight matched Gate 1 (live `register_auth_user` was still Task 10's, `ba30146e…`), and `supabase db push --linked` applied `20261013180000_member_survey.sql` (with the usual CLI cache warning). Then 20 of 20 migrations matched, and the post-push checks found 0 differences from local. Live data was unchanged: 1 member, no surveys yet. `main` was fast-forwarded to `2f74b00`, and Production deployment `dpl_5mz3jYvjZRFBaHFHqqreYPDucNb2` is READY. Smoke tests pass, 34 of 34. John Garcia has a paid cycle, so he sees the card, not the full-screen survey.
+
+## UI-001: The next-cycle choices didn't say what they do for a paid member   (status: built)
+Requested: 2026-10-14 by Clark. Where: My membership → "Explore your next cycle"; role: member.
+Why: every card said "Select <plan>", whether the member was renewing their plan, switching, or already had a next cycle waiting for payment.
+What changed (`public/next-cycle.js`; no migration). For a member with a paid current or upcoming cycle:
+- **Above the cards:** "You’re on Momentum until 10 Nov 2026. Choosing a plan below creates your next cycle, starting 11 Nov; your current one isn’t affected." The plan and dates are the member's latest paid cycle and the day after it.
+- **The current plan's card** says "Your current plan", in place of its marketing badge ("The balanced choice" on Momentum), and its button says "Renew Momentum". The others say "Switch to <plan> next cycle".
+- **If an unpaid next cycle or invoice already exists:** "Your next cycle (Momentum, from 11 Nov) is waiting for payment" with Pay now, and the cards lose their buttons, so no other plan is picked meanwhile.
+- **Members with no plan, or no paid cycle,** keep "Select <plan>".
+Test added: `tests/next-cycle.js` (`npm run test:next-cycle`, real stack):
+- on desktop and phone, the note with the member's dates, "Your current plan" and "Renew Momentum", and "Switch to … next cycle" on the others;
+- Renew starts the next cycle the day after the paid one;
+- then the waiting note with Pay now replaces the plan buttons, still marking the current plan;
+- a member with no plan keeps "Select".
+
+The demo browser test now accepts the waiting state, which its demo customer is in.
