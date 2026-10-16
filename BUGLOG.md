@@ -509,7 +509,7 @@ Test added:
   - The demo suites save their customers' surveys.
 Released 2026-10-14 after Clark's "go" (this migration only), with the paid-member routing he asked for first. The pre-flight matched Gate 1 (live `register_auth_user` was still Task 10's, `ba30146e…`), and `supabase db push --linked` applied `20261013180000_member_survey.sql` (with the usual CLI cache warning). Then 20 of 20 migrations matched, and the post-push checks found 0 differences from local. Live data was unchanged: 1 member, no surveys yet. `main` was fast-forwarded to `2f74b00`, and Production deployment `dpl_5mz3jYvjZRFBaHFHqqreYPDucNb2` is READY. Smoke tests pass, 34 of 34. John Garcia has a paid cycle, so he sees the card, not the full-screen survey.
 
-## UI-001: The next-cycle choices didn't say what they do for a paid member   (status: built)
+## UI-001: The next-cycle choices didn't say what they do for a paid member   (status: released)
 Requested: 2026-10-14 by Clark. Where: My membership → "Explore your next cycle"; role: member.
 Why: every card said "Select <plan>", whether the member was renewing their plan, switching, or already had a next cycle waiting for payment.
 What changed (`public/next-cycle.js`; no migration). For a member with a paid current or upcoming cycle:
@@ -524,3 +524,4 @@ Test added: `tests/next-cycle.js` (`npm run test:next-cycle`, real stack):
 - a member with no plan keeps "Select".
 
 The demo browser test now accepts the waiting state, which its demo customer is in.
+Released 2026-10-17 as its own release (no migration): `main` was fast-forwarded to `3ad98de`, and Production deployment `dpl_3eciB59pNYabFyDmywB7VjVa6daE` is READY. Smoke tests pass, 37 of 37, including the shipped `next-cycle.js` matching the commit.
