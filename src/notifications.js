@@ -1,19 +1,19 @@
 import nodemailer from 'nodemailer';
 import { serviceClient, result } from './supabase.js';
-export function paymentEmail(body, invoice, cycle, plan, origin) {
+import { coachingLabel, termsLines } from './plans.js';
+// terms: the cycle's purchased terms (Task 12A), so an email sent after a plan edit still describes what was bought.
+export function paymentEmail(body, invoice, cycle, terms, origin) {
   const remaining=(invoice.amount_cents-invoice.paid_cents)/100;
-  const features=Array.isArray(plan.features)?plan.features:[];
-  return [body, '', `Plan: ${plan.name}`, `Membership dates: ${cycle.start_date} to ${cycle.end_date}`, 'Plan privileges:', ...features.map(f=>`- ${f}`), '', remaining>0?`Remaining balance: PHP ${remaining.toFixed(2)}. Full payment is required for your member pass.`:'Your membership is fully paid. Your live member pass is available during the membership dates while your account is enabled.', `View your member pass: ${origin}/#/member/overview`, `View invoices and payment instructions: ${origin}/#/member/payments`, 'Sign in to your account. Member QR passes expire after 90 seconds; generate a fresh pass when visiting the gym.'].join('\n');
+  return [body, '', `Plan: ${terms.name}`, `Membership dates: ${cycle.start_date} to ${cycle.end_date}`, 'Plan privileges:', ...termsLines(terms).map(f=>`- ${f}`), `Coaching: ${coachingLabel(terms.coaching,terms.coachSessions)}`, '', remaining>0?`Remaining balance: PHP ${remaining.toFixed(2)}. Full payment is required for your member pass.`:'Your membership is fully paid. Your live member pass is available during the membership dates while your account is enabled.', `View your member pass: ${origin}/#/member/overview`, `View invoices and payment instructions: ${origin}/#/member/payments`, 'Sign in to your account. Member QR passes expire after 90 seconds; generate a fresh pass when visiting the gym.'].join('\n');
 }
-async function notificationBody(db, row, env) {
+export async function notificationBody(db, row, env) {
   if (!row.event_key?.startsWith('payment:')) return row.body;
   const payment=result(await db.from('ff_payments').select('invoice_id').eq('id',row.event_key.slice(8)).eq('workspace',row.workspace).single());
   const invoice=result(await db.from('ff_invoices').select('*').eq('id',payment.invoice_id).eq('workspace',row.workspace).single());
   const cycle=result(await db.from('ff_memberships').select('*').eq('id',invoice.membership_id).eq('workspace',row.workspace).single());
-  const plan=result(await db.from('ff_plans').select('*').eq('id',cycle.plan_id).eq('workspace',row.workspace).single());
   const origin=env.APP_ORIGIN || (env.VERCEL_URL ? `https://${env.VERCEL_URL}` : '');
   if (!origin) throw Error('Notification origin is missing.');
-  return paymentEmail(row.body,invoice,cycle,plan,new URL(origin).origin);
+  return paymentEmail(row.body,invoice,cycle,cycle.terms,new URL(origin).origin);
 }
 // A stable Message-ID helps investigation; SMTP cannot guarantee exactly-once delivery.
 export async function flushEmails(env = process.env, transport) {

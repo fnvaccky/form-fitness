@@ -853,6 +853,11 @@ test('payment email distinguishes partial balances from pass eligibility',async(
  assert.match(partial,/Remaining balance: PHP 799.00/);assert.match(partial,/Full payment is required/);assert.match(partial,/All strength equipment/);
  const full=paymentEmail('Payment confirmed',{amount_cents:89900,paid_cents:89900},cycle,plan,'http://localhost:4173');
  assert.match(full,/fully paid/);assert.match(full,/during the membership dates/);assert.match(full,/http:\/\/localhost:4173\/#\/member\/overview/);assert.doesNotMatch(full,/Remaining balance/);
+ // Task 12A: the email reads the cycle's purchased terms, so an edit to the plan afterwards changes nothing in it.
+ const terms={name:'Momentum',features:['Everything in Essential','Unlimited group classes'],included:[{line:'Everything in Essential',plan:'Essential',features:['Unlimited gym access','Locker room access']}],coaching:'group',coachSessions:0};
+ const momentum=paymentEmail('Payment confirmed',{amount_cents:149900,paid_cents:149900},cycle,terms,'http://localhost:4173');
+ assert.match(momentum,/Plan: Momentum\n/);assert.match(momentum,/- Everything in Essential: Unlimited gym access, Locker room access\n- Unlimited group classes\nCoaching: Group coaching\n/);
+ assert.match(paymentEmail('Paid',{amount_cents:1,paid_cents:1},cycle,{...terms,coaching:'personal',coachSessions:4},'http://localhost:4173'),/Coaching: Personal coach · 4 sessions/);
 });
 
 test('a repeat same-day check-in maps to 409 like the other already-recorded conflicts',async()=>{
@@ -868,9 +873,9 @@ test('scanning a member already checked in today shows the recorded visit and bl
  const source=(await readFile('public/connected.js','utf8')).match(/^async function verifyScanned\([^)]*\)\{.*$/m)?.[0];
  assert(source,'verifyScanned must stay a single top-level function in connected.js');
  const render=async(alreadyCheckedInAt,typed)=>{
-  let modal;const member={id:'M-1',name:'Test Member',phone:'09170000004',plan:'basic',end:'2026-10-31',photo:''};
+  let modal;const member={id:'M-1',name:'Test Member',phone:'09170000004',plan:'basic',terms:{name:'Essential (as bought)'},end:'2026-10-31',photo:''};
   const sandbox={api:async(path,body)=>{sandbox.sent=body;return {member,expires:0,alreadyCheckedInAt,...(typed?{token:'FORM2.from-code'}:{})};},closeModal(){},openModal:(title,subtitle,body,foot)=>{modal={body,foot};},
-   avatar:()=>'',esc:s=>String(s),badge:s=>`<span class="badge">${s}</span>`,planOf:()=>({name:'Basic'}),date:d=>d,btn:label=>`<button>${label}</button>`};
+   avatar:()=>'',esc:s=>String(s),badge:s=>`<span class="badge">${s}</span>`,planOf:()=>({name:'Basic'}),termsOf:m=>m.terms||{name:'Basic'},date:d=>d,btn:label=>`<button>${label}</button>`};
   vm.runInNewContext(source,sandbox);await sandbox.verifyScanned(typed?'7kq2 m9xd':'FORM2.token',typed);return {...modal,sent:sandbox.sent,token:sandbox.lastScannedToken};
  };
  // 13B: a typed pass code goes to the server as a code, and the check-in then uses the pass the server returned.
@@ -878,6 +883,7 @@ test('scanning a member already checked in today shows the recorded visit and bl
  assert.deepEqual({...typed.sent},{code:'7kq2 m9xd'},'the sandbox object is copied out of its realm first');assert.equal(typed.token,'FORM2.from-code');
  assert.deepEqual({...(await render(null)).sent},{token:'FORM2.token'},'a scanned QR still goes as a token');
  const fresh=await render(null);
+ assert.match(fresh.body,/<span>Plan<\/span><strong>Essential \(as bought\)<\/strong>/,'Task 12A: the plan the member bought');
  assert.doesNotMatch(fresh.body,/Already recorded/);assert.doesNotMatch(fresh.foot,/disabled/);
  // The database returns microsecond timestamptz JSON; 06:05 UTC is 14:05 in Manila.
  const repeat=await render('2026-10-09T06:05:00.123456+00:00');
@@ -1276,4 +1282,35 @@ test('the setup email greets an account without a name properly',async()=>{
  const template=await readFile('supabase/templates/recovery.html','utf8');
  assert(template.includes('{{ if .Data.name }}Hello {{ .Data.name }},{{ else }}Hello,{{ end }}'));
  assert.equal(template.split('{{ .Data.name }}').length-1,1,'the name is printed only inside the conditional');
+});
+
+// Task 12A: the plan form as plan management expects it, coaching labels, and purchased terms.
+test('the plan form keeps only plan fields and turns the price into centavos',async()=>{
+ const {planRequest}=await import('../src/plans.js');
+ const form={action:'update',id:'plus',name:'Momentum',price:'1499.50',days:'30',description:'d',features:['A'],available:true,coaching:'group',coachSessions:'0',focusTags:['cardio'],workspace:'demo',role:'admin',priceCents:1};
+ assert.deepEqual(planRequest(form),{action:'update',body:{id:'plus',name:'Momentum',days:30,description:'d',features:['A'],available:true,coaching:'group',coachSessions:0,focusTags:['cardio'],priceCents:149950}});
+ assert.throws(()=>planRequest({...form,action:undefined}),error=>error.status===409&&/out of date/.test(error.message),'an old page without an action is told to reload');
+ assert.throws(()=>planRequest({...form,action:'delete'}),error=>error.status===409,'there is no delete');
+ assert.throws(()=>planRequest({...form,price:'12.345'}),error=>error.status===400);
+ assert.equal(planRequest({...form,days:'thirty'}).body.days,'thirty','anything else is left for the database to refuse');
+});
+
+test('coaching labels never show a number of sessions that is not included',async()=>{
+ const {coachingLabel}=await import('../src/plans.js');
+ assert.equal(coachingLabel('none',0),'No coach');
+ assert.equal(coachingLabel('group',0),'Group coaching');
+ assert.equal(coachingLabel('group',1),'Group coaching · 1 session');
+ assert.equal(coachingLabel('personal',4),'Personal coach · 4 sessions');
+ assert.equal(coachingLabel('personal',0),'Personal coach · no sessions included');
+ assert.equal(coachingLabel(undefined,undefined),'No coach');
+});
+
+test('purchased terms are shown like a plan, with what each "Everything in" line meant',async()=>{
+ const {termsView,termsLines}=await import('../src/plans.js');
+ const terms={name:'Momentum',priceCents:149900,days:30,description:'More variety.',features:['Everything in Essential','Unlimited group classes'],
+  included:[{line:'Everything in Essential',plan:'Essential',features:['Unlimited gym access','Locker room access']}],coaching:'group',coachSessions:0,source:'purchase'};
+ assert.deepEqual(termsView(terms,'plus'),{id:'plus',name:'Momentum',price:1499,priceCents:149900,days:30,desc:'More variety.',features:terms.features,included:terms.included,coaching:'group',coachSessions:0,coachingLabel:'Group coaching'});
+ assert.equal(termsView(null,'plus'),null,'no cycle, no terms');
+ assert.deepEqual(termsLines(terms),['Everything in Essential: Unlimited gym access, Locker room access','Unlimited group classes']);
+ assert.deepEqual(termsLines({features:['Everything in Gold','Sauna'],included:[]}),['Everything in Gold','Sauna'],'a line that named no plan stays as written');
 });

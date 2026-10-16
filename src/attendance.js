@@ -8,9 +8,10 @@ export const manilaTime=iso=>new Date(iso).toLocaleTimeString('en-GB',{timeZone:
 // 13A: what members see uses the 12-hour clock ("10:15 AM"). Newer ICU puts a narrow no-break space before AM/PM.
 export const manilaClock=iso=>new Date(iso).toLocaleTimeString('en-US',{timeZone:'Asia/Manila',hour:'numeric',minute:'2-digit'}).replace(/\s/g,' ');
 // 13A: the caller's own check-in today, for the member's pass screen (api.js lets only members ask; RLS agrees).
+// Task 12A: planName is the plan the visit's cycle was bought as, whatever the catalog calls it now.
 export async function checkinStatus(client,profile,today){
- const row=result(await client.from('ff_checkins').select('checkin_date,created_at,membership:ff_memberships(plan_id)').eq('member_id',profile.id).eq('checkin_date',today).maybeSingle());
- return row?{checkedIn:true,date:row.checkin_date,time:manilaClock(row.created_at),at:row.created_at,plan:row.membership?.plan_id||''}:{checkedIn:false,date:today};
+ const row=result(await client.from('ff_checkins').select('checkin_date,created_at,membership:ff_memberships(plan_id,terms)').eq('member_id',profile.id).eq('checkin_date',today).maybeSingle());
+ return row?{checkedIn:true,date:row.checkin_date,time:manilaClock(row.created_at),at:row.created_at,plan:row.membership?.plan_id||'',planName:row.membership?.terms?.name||''}:{checkedIn:false,date:today};
 }
 function realDate(value,label){
  if(typeof value!=='string'||!DATE.test(value))fail(`${label} must be a date (YYYY-MM-DD).`);
@@ -36,7 +37,7 @@ export async function attendanceReport(client,query,today){
  const range=attendanceRange(query,today);
  const plans=Object.fromEntries(result(await client.from('ff_plans').select('id,name')).map(p=>[p.id,p.name]));
  if(range.plan!=='all'&&!Object.hasOwn(plans,range.plan))fail('Choose a plan from the list.');
- const membership=range.plan==='all'?'membership:ff_memberships(plan_id)':'membership:ff_memberships!inner(plan_id)';
+ const membership=range.plan==='all'?'membership:ff_memberships(plan_id,terms)':'membership:ff_memberships!inner(plan_id,terms)';
  const page=offset=>{
   let q=client.from('ff_checkins').select(`id,member_id,checkin_date,created_at,member:ff_profiles!ff_checkins_workspace_member_id_fkey(name),staff:ff_profiles!ff_checkins_confirmed_by_fkey(name),${membership}`)
    .gte('checkin_date',range.from).lte('checkin_date',range.to).order('created_at',{ascending:false}).order('id',{ascending:false});
@@ -48,6 +49,7 @@ export async function attendanceReport(client,query,today){
  // Stop at 10,000 rows; one more row means there was more to show.
  const truncated=rows.length>=CAP&&(await page(CAP)).length>0;
  const visits=rows.slice(0,CAP).map(r=>({id:r.id,date:r.checkin_date,time:manilaTime(r.created_at),memberId:r.member_id,name:r.member?.name||'',
-  plan:plans[r.membership?.plan_id]||r.membership?.plan_id||'',confirmedBy:r.staff?.name||''}));
+  // Task 12A: the plan as the visit's cycle was bought; the filter above still uses the catalog plan.
+  plan:r.membership?.terms?.name||plans[r.membership?.plan_id]||r.membership?.plan_id||'',confirmedBy:r.staff?.name||''}));
  return {from:range.from,to:range.to,plan:range.plan,visits,totals:attendanceTotals(visits,range.days),truncated};
 }

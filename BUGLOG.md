@@ -508,6 +508,7 @@ Test added:
   - The onboarding test fills in the desk survey.
   - The demo suites save their customers' surveys.
 Released 2026-10-14 after Clark's "go" (this migration only), with the paid-member routing he asked for first. The pre-flight matched Gate 1 (live `register_auth_user` was still Task 10's, `ba30146e…`), and `supabase db push --linked` applied `20261013180000_member_survey.sql` (with the usual CLI cache warning). Then 20 of 20 migrations matched, and the post-push checks found 0 differences from local. Live data was unchanged: 1 member, no surveys yet. `main` was fast-forwarded to `2f74b00`, and Production deployment `dpl_5mz3jYvjZRFBaHFHqqreYPDucNb2` is READY. Smoke tests pass, 34 of 34. John Garcia has a paid cycle, so he sees the card, not the full-screen survey.
+Accepted 2026-10-17: Clark confirmed in his own live retest that the deployed Task 11 updates work. This records his user acceptance; it is not a new independent test run.
 
 ## UI-001: The next-cycle choices didn't say what they do for a paid member   (status: released)
 Requested: 2026-10-14 by Clark. Where: My membership → "Explore your next cycle"; role: member.
@@ -525,3 +526,71 @@ Test added: `tests/next-cycle.js` (`npm run test:next-cycle`, real stack):
 
 The demo browser test now accepts the waiting state, which its demo customer is in.
 Released 2026-10-17 as its own release (no migration): `main` was fast-forwarded to `3ad98de`, and Production deployment `dpl_3eciB59pNYabFyDmywB7VjVa6daE` is READY. Smoke tests pass, 37 of 37, including the shipped `next-cycle.js` matching the commit.
+Accepted 2026-10-17: Clark confirmed in his own live retest that the deployed UI-001 update works. This records his user acceptance; it is not a new independent test run.
+
+## FEATURE-008: Plan management with coaching, and purchased terms that survive plan edits   (status: Gate 1)
+Requested: 2026-10-17 by Clark (Task 12, Part A, and the 12A instruction file). Where: Members & plans → Membership plans; plan cards everywhere; the member's card, overview and My membership; invoices; payment emails; the pass, check-in and scan screens; the attendance report. Roles: administrators manage plans, staff see them read-only, members see coaching and what they bought.
+What changed:
+- **Plan management, administrators only:**
+  - Membership plans has Add plan, and an Edit plan for every plan. The fields:
+    - name and plan ID (the ID can't change later);
+    - price in PHP and cycle length (1–366 days);
+    - description (up to 200 characters, one line);
+    - features (up to 10 lines of 80 characters);
+    - Available;
+    - coaching (No coach, Group coaching or Personal coach) and coach sessions per cycle (0–30; 0 with no coach);
+    - focus tags (strength, cardio, mobility, group classes), for Task 12B's suggestions.
+  - Nothing is deleted. Unticking Available retires a plan.
+  - Saving shows "Saving…" and sends once, and the screen then shows the plan exactly as the server saved it, without a reload.
+  - Staff see the same cards, with no Add plan or Edit plan.
+- **Checked in the database:** `ff_private.plan_admin`, separate from `ff_private.command`, takes the administrator and the workspace from the session and checks every field.
+  - `ff_plans` refuses every other write, including the old `plans` action of `command` and the service key, and it refuses every delete.
+  - Plan names are unique in a workspace, ignoring case.
+- **Cards show the coaching:** "No coach", "Group coaching", "Personal coach · 4 sessions". A coach with 0 sessions never shows "0 sessions": a personal coach then says "no sessions included".
+- **Defaults, in both workspaces:**
+  - Essential: no coach, 0 sessions; focus strength and cardio.
+  - Momentum: group coaching, 0 sessions (no invented session count); focus cardio, mobility and group classes.
+  - Performance: personal coach, 4 sessions; focus strength and mobility.
+
+  Prices, lengths, descriptions and features are unchanged.
+- **Purchased terms:**
+  - Every membership cycle, and every first registration, keeps what was bought: name, price, length, description, features and coaching.
+  - It also keeps what each "Everything in <plan>" line meant at that moment.
+  - The terms are taken from the plan row in the same transaction (a trigger; `new_membership` already locks that row), and they never change afterwards.
+  - Everything about a cycle already bought reads them:
+    - members and invoices;
+    - payment emails, even one sent after a plan edit;
+    - the pass, check-in and scan screens;
+    - attendance;
+    - UI-001's "You're on …" note.
+
+    The catalog is used only to choose a new cycle.
+- **Retired plans:** no new cycle or registration. A cycle, invoice or registration that already exists stays payable at its own terms: `paymongo_prepare` no longer re-checks availability for those.
+- **Smaller fixes that editing plans made necessary:** plan cards and the member's card show each plan's own length instead of a fixed "30 days". Plan names and descriptions on cards are now escaped.
+- **Migration** `20261017120000_plan_management.sql`:
+  - plan columns and checks;
+  - `terms` on cycles and registrations, with their trigger;
+  - a one-time backfill;
+  - the plan write guard;
+  - `plan_admin` and `ff_plan_admin`;
+  - narrow changes to `register_auth_user` (completion copies the registration's terms) and `paymongo_prepare` (two availability re-checks removed).
+
+  `REPORT_TASK_12A_GATE1.md` has the full SQL, the diffs and the checks.
+
+Test added:
+- `tests/plans-database.sql` (125 checks):
+  - administrators only, workspace isolation, every field checked, no other write path, no delete;
+  - terms through plan edits, retirement, and every way a cycle is created, including retries;
+  - registration completion and the grants.
+- `tests/plans.js` (`npm run test:plans`, real stack):
+  - the API, an email after an edit, retirement, and a plan edit racing a new cycle in both orders;
+  - the screens for administrators, staff and members on desktop and phone.
+- `tests/unit.test.js` and `tests/attendance.test.js`: the plan form, coaching labels, the terms view, the email and the scan screen.
+- `tests/attendance.js`: `/checkin-status` also returns the plan name as bought.
+
+Live steps after "go": push the migration first, then release (fast-forward `main`), then smoke-test.
+
+## BUG-017: A walk-in renewal on a plan retired meanwhile says "Plan price changed"   (status: noticed)
+Found: 2026-10-17 while building FEATURE-008. Where: Renewals & payments → Walk-in renewal; roles: staff, admin.
+What happens: `ff_private.walkin_renew` refuses a plan that is no longer available with "Plan price changed. Review the full cash amount." The form lists only available plans, so this shows only if a plan is retired while the form is open. Nothing is charged or created.
+Not changed in FEATURE-008, which would have meant replacing `walkin_renew` as well. A later migration can give it its own message ("This plan was retired. Choose another plan.").

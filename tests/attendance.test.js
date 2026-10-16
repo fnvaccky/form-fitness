@@ -42,8 +42,9 @@ test('check-in status reads only the caller\'s own check-in for today',async()=>
  const reads=[];
  const fake=row=>({from(table){const q={table,filters:[],select(columns){this.columns=columns;return this;},eq(k,v){this.filters.push([k,v]);return this;},
   maybeSingle(){reads.push(this);return Promise.resolve({data:row,error:null});}};return q;}});
- const visited=await checkinStatus(fake({checkin_date:'2026-10-13',created_at:'2026-10-13T02:15:00Z',membership:{plan_id:'plus'}}),{id:'member-1'},'2026-10-13');
- assert.deepEqual(visited,{checkedIn:true,date:'2026-10-13',time:'10:15 AM',at:'2026-10-13T02:15:00Z',plan:'plus'});
+ const visited=await checkinStatus(fake({checkin_date:'2026-10-13',created_at:'2026-10-13T02:15:00Z',membership:{plan_id:'plus',terms:{name:'Momentum (as bought)'}}}),{id:'member-1'},'2026-10-13');
+ assert.deepEqual(visited,{checkedIn:true,date:'2026-10-13',time:'10:15 AM',at:'2026-10-13T02:15:00Z',plan:'plus',planName:'Momentum (as bought)'},'Task 12A: the plan name the cycle was bought as');
+ assert.match(reads[0].columns,/membership:ff_memberships\(plan_id,terms\)/);
  assert.equal(reads[0].table,'ff_checkins');
  assert.deepEqual(reads[0].filters,[['member_id','member-1'],['checkin_date','2026-10-13']],'the caller\'s own row, today only');
  assert.deepEqual(await checkinStatus(fake(null),{id:'member-1'},'2026-10-13'),{checkedIn:false,date:'2026-10-13'});
@@ -76,9 +77,12 @@ test('the attendance report reads 1,000 rows at a time, stops at 10,000 and says
  assert.equal(smallReport.visits.length,2500);assert.equal(smallReport.truncated,false);assert.deepEqual(small.calls.map(c=>c.a),[0,1000,2000]);
  assert.deepEqual(smallReport.visits[1],{id:'c1',date:'2026-10-11',time:'12:00',memberId:'m1',name:'Member 1',plan:'Momentum',confirmedBy:'Front Desk'});
  assert.deepEqual(smallReport.totals,{visits:2500,uniqueMembers:7,days:7,dailyAverage:357.1});
+ // Task 12A: a visit shows the plan its cycle was bought as; the catalog name is only the fallback.
+ const renamed=fakeClient([{...row(1),membership:{plan_id:'plus',terms:{name:'Momentum'}}}],[{id:'basic',name:'Essential'},{id:'plus',name:'Momentum Max'}]);
+ assert.equal((await attendanceReport(renamed,query,today)).visits[0].plan,'Momentum','the purchased name, not the catalog name now');
  const filtered=fakeClient([row(1)]);
  await attendanceReport(filtered,{...query,plan:'plus'},today);
- assert.match(filtered.calls[0].select,/membership:ff_memberships!inner\(plan_id\)/);assert.deepEqual(filtered.calls[0].eq,['membership.plan_id','plus']);
+ assert.match(filtered.calls[0].select,/membership:ff_memberships!inner\(plan_id,terms\)/);assert.deepEqual(filtered.calls[0].eq,['membership.plan_id','plus']);
  const unknown=fakeClient([row(1)]);
  await assert.rejects(attendanceReport(unknown,{...query,plan:'gold'},today),error=>error.status===400&&/Choose a plan/.test(error.message));
  assert.equal(unknown.calls.length,0,'an unknown plan is refused before any check-in is read');

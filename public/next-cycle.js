@@ -12,7 +12,8 @@ function nextCycleInfo(member) {
   const paid = own.filter(i => i.paidCents >= i.amountCents).sort((a, b) => a.end.localeCompare(b.end)).at(-1);
   if (!paid) return null;
   const waiting = own.filter(i => i.paidCents < i.amountCents).sort((a, b) => a.start.localeCompare(b.start))[0];
-  return {plan: planOf(paid.plan), until: paid.end, next: addDays(paid.end, 1), waiting};
+  // Task 12A: the plan as the member bought it; renewing (below) offers the catalog plan as it is now.
+  return {plan: termsOf(paid), until: paid.end, next: addDays(paid.end, 1), waiting};
 }
 
 {
@@ -29,14 +30,14 @@ function nextCycleInfo(member) {
     });
     if (info.waiting) {
       // Pay for the next cycle first; the cards stay for reference, without their buttons.
-      const plan = planOf(info.waiting.plan);
+      const plan = termsOf(info.waiting);
       const pay = can('initiateOnlinePayment') ? btn('Pay now', 'pay', 'primary', `data-id="${esc(info.waiting.id)}"`, 'arrow') : '<span>Pay at the front desk.</span>';
       cards = cards.replace(/<button class="button[^"]*" data-action="select-plan"[^>]*>[\s\S]*?<\/button>/g, '');
       const waiting = `<div class="next-cycle-note waiting" role="status"><p>Your next cycle (${esc(plan.name)}, from ${date(info.waiting.start, true)}) is waiting for payment.</p>${pay}</div>`;
       return html.slice(0, start) + cards.replace('<section class="plans-grid"', waiting + '<section class="plans-grid"') + html.slice(end);
     }
     // Renew the current plan, or switch for the next cycle.
-    for (const p of plans) cards = cards.replace(`Select ${p.name}</button>`, `${esc(p.id === info.plan.id ? `Renew ${p.name}` : `Switch to ${p.name} next cycle`)}</button>`);
+    for (const p of plans) cards = cards.replace(`Select ${esc(p.name)}</button>`, `${esc(p.id === info.plan.id ? `Renew ${p.name}` : `Switch to ${p.name} next cycle`)}</button>`);
     const note = `<div class="next-cycle-note" role="note"><p>You’re on ${esc(info.plan.name)} until ${date(info.until)}. Choosing a plan below creates your next cycle, starting ${date(info.next, true)}; your current one isn’t affected.</p></div>`;
     return html.slice(0, start) + cards.replace('<section class="plans-grid"', note + '<section class="plans-grid"') + html.slice(end);
   };

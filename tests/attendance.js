@@ -114,7 +114,7 @@ try{
  const visitor=others[1],visitorApi=client(prod.origin);await visitorApi.post('/login',{email:visitor.email,password:visitor.password});
  const visitorToday=otherRows.find(r=>r.member_id===visitor.id&&r.checkin_date===day(0));
  const seen=await visitorApi.get('/checkin-status');
- assert.deepEqual({...seen,at:new Date(seen.at).toISOString()},{checkedIn:true,date:day(0),time:manilaClock(visitorToday.created_at),at:new Date(visitorToday.created_at).toISOString(),plan:'plus'});
+ assert.deepEqual({...seen,at:new Date(seen.at).toISOString()},{checkedIn:true,date:day(0),time:manilaClock(visitorToday.created_at),at:new Date(visitorToday.created_at).toISOString(),plan:'plus',planName:'Momentum'},'Task 12A: with the plan name the cycle was bought as');
  assert.deepEqual(await memberApi.get('/checkin-status'),{checkedIn:false,date:day(0)},'eleven other members visited today, but not this one');
  const demoVisitorApi=client(demo.origin);await demoVisitorApi.post('/login',{email:demoMember.email,password:demoMember.password});
  assert.deepEqual(await demoVisitorApi.get('/checkin-status'),{checkedIn:false,date:day(0)},'the demo member\'s older visits don\'t count as today');

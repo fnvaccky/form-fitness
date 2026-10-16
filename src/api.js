@@ -8,6 +8,7 @@ import {createStaff,updateStaff,setStaffEnabled,resendStaffSetup} from './staff.
 import {createMember} from './members.js';
 import {attendanceReport,checkinStatus} from './attendance.js';
 import {validateSurvey,surveyView} from './survey.js';
+import {planRequest} from './plans.js';
 import {deleteUnpaidAccount,runAutomaticCleanup,cronAuthorized} from './cleanup.js';
 import { flushEmails } from './notifications.js';
 
@@ -164,6 +165,13 @@ export async function handle(req,res,env=process.env) {
       const saved=result(await client.rpc('ff_save_member_survey',{body:answers}));
       return send(res,200,{goal:answers.goal,survey:surveyView(saved)});
     }
+    // Task 12A: plan management, through ff_private.plan_admin only (administrators of their own workspace, checked
+    // in the database). It answers with the plan as saved, so the screen shows what the server stored.
+    if(path==='/plans'){
+      admin();const request=planRequest(body);
+      const saved=result(await client.rpc('ff_plan_admin',request));
+      return send(res,200,{plan:planView(saved),alreadySaved:saved.alreadySaved===true});
+    }
     if(path==='/staff'){admin();return send(res,201,await createStaff(client,body,env,origin));}
     if(path==='/staff/update'){admin();return send(res,200,await updateStaff(client,body));}
     if(path==='/staff/enable'){admin();return send(res,200,await setStaffEnabled(client,body));}
@@ -233,8 +241,7 @@ export async function handle(req,res,env=process.env) {
     if(path==='/payment-submissions' && body.receipt)body.receipt=await upload(client,profile,body.receipt,'receipt');
     if(['/payments','/payment-submissions'].includes(path))body.amountCents=cents(body.amount);
     if(path==='/renew')startDate(body.start);
-    if(path==='/plans'){admin();body.priceCents=cents(body.price);if(typeof body.name!=='string'||/[<>\r\n]/.test(body.name))fail('Enter a valid plan name.');}
-    const allowed=['profile','payments','payment-submissions','review-payment','scan','check-in','settings/payments','plans','manage-member','renew'];
+    const allowed=['profile','payments','payment-submissions','review-payment','scan','check-in','settings/payments','manage-member','renew'];
     if(!allowed.includes(path.slice(1)))fail('Endpoint not found.',404);
     // 13B: a typed pass code brings back the member's own signed pass, so the scan (and the check-in after it) is the QR's.
     let viaCode=false;
