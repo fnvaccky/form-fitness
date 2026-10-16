@@ -28,6 +28,7 @@
     "test:pass": "node --env-file-if-exists=.env.local tests/pass-check.js",
     "test:survey": "node tests/survey-browser.js",
     "test:survey-flow": "node --env-file-if-exists=.env.local tests/survey.js",
+    "test:next-cycle": "node --env-file-if-exists=.env.local tests/next-cycle.js",
     "reset:test-data": "node --env-file-if-exists=.env.local scripts/reset-test-data.js"
   },
   "engines": {

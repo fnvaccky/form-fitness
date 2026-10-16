@@ -32,7 +32,15 @@ try{
  await page.keyboard.press('Escape');pass(visited?'Active member pass shows today\'s check-in instead of a new QR':'Active member pass renders as a scannable QR');
  await page.getByRole('link',{name:'My payments',exact:true}).click();await heading('Your payments, at a glance.');
  await page.getByRole('link',{name:'My membership',exact:true}).click();
- await page.getByRole('button',{name:'Select Performance',exact:true}).click();await heading('Create your next membership cycle');assert.match(await page.locator('.notice').innerText(),/real invoice/);await page.keyboard.press('Escape');pass('Payments, membership navigation and honest renewal confirmation UI');
+ // UI-001: a paid member renews or switches for their next cycle; while one waits for payment, they pay it instead.
+ await page.locator('.plans-grid').waitFor();
+ if(await page.locator('.next-cycle-note.waiting').count()){
+  assert.match(await page.locator('.next-cycle-note.waiting').innerText(),/^Your next cycle \(.+, from \d{1,2} [A-Z][a-z]{2}\) is waiting for payment\./);
+  assert.equal(await page.locator('[data-action="select-plan"]').count(),0,'no other plan while the next cycle waits');
+ }else{
+  await page.locator('.plan-card:not(.current-plan) [data-action="select-plan"]').first().click();await heading('Create your next membership cycle');assert.match(await page.locator('.notice').innerText(),/real invoice/);await page.keyboard.press('Escape');
+ }
+ pass('Payments, membership navigation and honest renewal confirmation UI');
  await page.setViewportSize({width:390,height:844});await page.waitForFunction(()=>document.querySelector('.sidebar').getBoundingClientRect().right<=1);await page.screenshot({animations:'disabled',path:'test-results/member-mobile.png'});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  await page.getByRole('button',{name:'Open navigation',exact:true}).click();await page.getByRole('link',{name:'My overview',exact:true}).click();await heading('Your next chapter, DEMO.');assert.equal(await page.locator('.sidebar.open').count(),0);pass('Mobile member layout fits viewport and navigation closes');
  await page.getByRole('button',{name:'Log out',exact:true}).click();await heading('Good to see you.');
