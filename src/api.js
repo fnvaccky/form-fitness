@@ -8,6 +8,7 @@ import {createStaff,updateStaff,setStaffEnabled,resendStaffSetup} from './staff.
 import {createMember} from './members.js';
 import {attendanceReport,checkinStatus} from './attendance.js';
 import {validateSurvey,surveyView} from './survey.js';
+import {saveMemberHealth} from './member-health.js';
 import {planRequest} from './plans.js';
 import {deleteUnpaidAccount,runAutomaticCleanup,cronAuthorized} from './cleanup.js';
 import { flushEmails } from './notifications.js';
@@ -158,6 +159,8 @@ export async function handle(req,res,env=process.env) {
     // skipped: no plan selection or online checkout until it is saved. Staff and administrators are never asked.
     if(profile.role==='member' && (path==='/renew'||path==='/paymongo/checkout') && !result(await client.from('ff_member_surveys').select('id').eq('id',profile.id).maybeSingle()))
       fail('Complete your fitness survey first.',403);
+    // Separate optional health information belongs only to the member, never the roster or survey response.
+    if(path==='/member-health') return send(res,200,{memberHealth:await saveMemberHealth(client,profile,body)});
     // Task 11 (from a classmate's survey work): members save their own answers through the session-scoped function.
     if(path==='/member-survey') {
       if(profile.role!=='member')fail('Only members can save their own survey.',403);

@@ -99,3 +99,32 @@
 .sample-exercise-dose{display:block;font-size:13px;color:#526454}
 .sample-exercises p{font-size:13px;line-height:1.7;margin:4px 0 0}
 @media(max-width:680px){.sample-training .panel-header{flex-wrap:wrap}.sample-training-body{padding:0 18px 20px}.sample-week-grid{grid-template-columns:1fr}.sample-week-day{padding:16px}}
+/* Optional health information is a separate member-only form, never part of the survey gate. */
+.health-panel{margin:20px 0;color:var(--ink)}
+.health-panel .panel-header{align-items:flex-start;gap:16px}
+.health-panel .panel-header h2{font-size:17px;font-weight:600;letter-spacing:-.02em}
+.health-panel .panel-header p,.health-privacy,.health-note{font-size:13px;line-height:1.7;color:#526454}
+.health-body{padding:0 24px 24px;min-width:0}
+.health-privacy{margin:0 0 16px;max-width:75ch}
+.health-note{margin:8px 0 16px}
+.health-bmi{padding:14px 16px;border:1px solid var(--line);border-radius:7px;background:#f7faf4;overflow-wrap:anywhere}
+.health-bmi p{margin:0;font-size:14px;line-height:1.7}
+.health-bmi .health-note{font-size:13px;margin-top:6px}
+.health-bmi-category{display:inline-block;margin-left:10px;font-size:13px;color:#526454}
+.health-details{margin-top:20px;min-width:0}
+.health-details summary{font-size:14px;font-weight:600;cursor:pointer;line-height:1.7;padding:6px 0}
+.health-details[open] summary{margin-bottom:16px}
+.health-panel .field label{font-size:14px;line-height:1.5;font-weight:600}
+.health-panel :is(input[type="number"],select){width:100%;min-height:46px;font:inherit;font-size:14px;color:var(--ink);background:#fff}
+.health-conditions{margin-top:22px}
+.health-conditions legend{font-size:14px;font-weight:600;line-height:1.5}
+.health-conditions .survey-choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+.health-conditions .survey-choice{min-width:0;align-items:flex-start}
+.health-conditions .survey-choice input{margin-top:3px}
+.health-conditions .survey-choice span{overflow-wrap:anywhere}
+.health-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:10px;margin-top:22px}
+.health-actions .button{min-height:44px;font-size:13px;white-space:normal;text-align:center}
+.health-panel :is(input,select,button,summary):focus-visible,.health-panel [tabindex="-1"]:focus{outline:2px solid var(--ink);outline-offset:4px}
+.health-panel [hidden]{display:none!important}
+.health-panel [aria-busy="true"]{opacity:.7}
+@media(max-width:680px){.health-body{padding:0 18px 20px}.health-panel .form-grid,.health-conditions .survey-choices{grid-template-columns:1fr}.health-actions{flex-direction:column}.health-actions .button{width:100%}.health-bmi-category{display:block;margin-left:0}}

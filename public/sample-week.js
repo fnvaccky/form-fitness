@@ -7,6 +7,7 @@
 // https://www.cdc.gov/physical-activity-basics/adding-adults/index.html
 // https://www.cdc.gov/physical-activity-basics/guidelines/adults.html
 import {recommendationInputs} from './plan-recommender.js';
+import {exerciseGuidance} from './health-inputs.js';
 
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const LABELS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -101,7 +102,8 @@ function trainingSession(inputs, slot) {
 
 // Call with the saved survey plus the profile's goal, as for membership recommendations.
 // No clock, network, storage or input mutation: the same known answers always produce the same sample.
-export function createSampleWeek(answers) {
+export function createSampleWeek(answers, health = null) {
+  if (exerciseGuidance(health) === 'professional') return {status: 'professional-guidance'};
   const inputs = recommendationInputs(answers);
   if (inputs.missing.length) return {status: 'incomplete', missing: inputs.missing};
   const selected = trainingDays(inputs.availableDays, LEVELS[inputs.experience].cap);

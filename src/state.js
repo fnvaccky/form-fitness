@@ -3,6 +3,7 @@ import { today } from './validation.js';
 import {paymongoConfiguration} from './paymongo-config.js';
 import {manilaClock} from './attendance.js';
 import {surveyView} from './survey.js';
+import {memberHealthFor} from './member-health.js';
 import {coachingLabel,termsView} from './plans.js';
 export const BUCKET = 'form-fitness-private';
 const datePH = value => new Date(new Date(value).getTime() + 8 * 3600000).toISOString().slice(0,10);
@@ -33,7 +34,7 @@ export async function stateFor(client, profile, env) {
   const current = today(), gymStaff = ['admin','staff'].includes(profile.role);
   // A member's own latest visits (RLS limits members to their own rows anyway); staff get the workspace's.
   const recentCheckins = profile.role==='member' ? client.from('ff_checkins').select('*').eq('member_id',profile.id) : client.from('ff_checkins').select('*');
-  const [profiles, cycles, invoices, payments, submissions, checkins, plans, settings, outbox, registrations, checkouts, unpaidAccounts, visitsToday, surveys] = await Promise.all([
+  const [profiles, cycles, invoices, payments, submissions, checkins, plans, settings, outbox, registrations, checkouts, unpaidAccounts, visitsToday, surveys, memberHealth] = await Promise.all([
     allRows(client,'ff_profiles'), allRows(client,'ff_memberships'), allRows(client,'ff_invoices'), allRows(client,'ff_payments'), allRows(client,'ff_submissions'),
     recentCheckins.order('created_at',{ascending:false}).limit(50).then(result),
     client.from('ff_plans').select('*').order('price_cents').then(result),
@@ -46,7 +47,9 @@ export async function stateFor(client, profile, env) {
     // Task 13: today's visits for the staff dashboard, an exact count without fetching rows.
     gymStaff ? client.from('ff_checkins').select('id',{count:'exact',head:true}).eq('checkin_date',current).then(response=>{result(response);return response.count??0;}) : undefined,
     // Task 11: fitness surveys (a member reads their own; staff read their workspace's).
-    allRows(client,'ff_member_surveys')
+    allRows(client,'ff_member_surveys'),
+    // Owner-only optional information: staff/admin do not even issue this table query.
+    memberHealthFor(client,profile)
   ]);
   const surveyByMember = new Map(surveys.map(row=>[row.id,surveyView(row)]));
   const members = await Promise.all(profiles.filter(p=>p.role==='member').map(async p=> {
@@ -57,7 +60,7 @@ export async function stateFor(client, profile, env) {
   const destinations = {};
   for (const [key, value] of Object.entries(settings.payments || {})) destinations[key] = {...value,imagePath:value.image,image:await signedImage(client,value.image)};
   return {
-    user:userView(profile),date:current,members,staff:staffFor(profile,profiles),unpaidAccounts,stats:gymStaff?{visitsToday}:undefined,
+    user:userView(profile),date:current,members,memberHealth,staff:staffFor(profile,profiles),unpaidAccounts,stats:gymStaff?{visitsToday}:undefined,
     // Task 13: My visits. One check-in a day at most, so this month's visits are always within the latest 50.
     visits:profile.role==='member'?{recent:checkins.slice(0,30).map(c=>({date:c.checkin_date,time:manilaClock(c.created_at)})),last:checkins[0]?{date:checkins[0].checkin_date,time:manilaClock(checkins[0].created_at)}:null,thisMonth:checkins.filter(c=>String(c.checkin_date).startsWith(current.slice(0,7))).length}:undefined,registrations,checkouts,paymongo:paymongoConfiguration(env),plans:plans.map(planView),
     invoices:invoices.map(i=>{const c=cycles.find(c=>c.id===i.membership_id);return {id:i.id,memberId:i.member_id,plan:c.plan_id,terms:termsView(c.terms,c.plan_id),amount:i.amount_cents/100,amountCents:i.amount_cents,paidCents:i.paid_cents,start:c.start_date,end:c.end_date,due:c.start_date,created:datePH(i.created_at)};}),

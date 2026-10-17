@@ -9,7 +9,7 @@
     "dev": "node --watch --env-file-if-exists=.env.local src/dev.js",
     "check": "node scripts/check.js",
     "build": "node build.cjs",
-    "test": "node --test tests/unit.test.js tests/paymongo-unit.test.js tests/reset-test-data.test.js tests/attendance.test.js tests/recommendations.test.js tests/sample-week.test.js",
+    "test": "node --test tests/unit.test.js tests/paymongo-unit.test.js tests/reset-test-data.test.js tests/attendance.test.js tests/recommendations.test.js tests/sample-week.test.js tests/health-inputs.test.js tests/member-health-api.test.js",
     "test:integration": "node --env-file-if-exists=.env.local tests/integration.js",
     "test:browser": "node --env-file-if-exists=.env.local tests/browser.js",
     "seed:demo": "node --env-file-if-exists=.env.local scripts/seed-demo.js",
@@ -33,7 +33,7 @@
     "test:plans-concurrency": "node tests/plans-concurrency.js",
     "test:recommendations": "node --env-file-if-exists=.env.local tests/recommendations.js",
     "test:recommendations:member": "node --test tests/recommendations-member.test.js",
-    "test:sample-training": "node --test tests/sample-week.test.js tests/sample-training-browser.test.js",
+    "test:sample-training": "node --test tests/sample-week.test.js tests/health-inputs.test.js tests/sample-training-browser.test.js tests/member-health-browser.test.js",
     "reset:test-data": "node --env-file-if-exists=.env.local scripts/reset-test-data.js"
   },
   "engines": {
