@@ -5,6 +5,7 @@ import {after,before,describe,test} from 'node:test';
 import {chromium} from 'playwright';
 import {createDevServer} from '../src/dev.js';
 import {capabilitiesFor,planView} from '../src/state.js';
+import {createAttendanceTracker} from '../public/attendance-tracker.js';
 
 const TODAY='2026-10-17',MEMBER='11111111-2222-3333-4444-555555555555',OTHER='22222222-3333-4444-5555-666666666666';
 function fixture(role='staff') {
@@ -40,9 +41,12 @@ describe('dedicated Attendance sections',{concurrency:false},()=>{
    if(method==='GET'&&path==='/api/plans')body={plans:f.plans};
    else if(method==='GET'&&path==='/api/session')body={user:f.user,date:TODAY};
    else if(method==='GET'&&path==='/api/state')body=snapshot(f);
+   else if(method==='GET'&&path==='/api/member-attendance')body=createAttendanceTracker({period:url.searchParams.get('period'),date:url.searchParams.get('date'),today:TODAY,
+    events:[{id:'own-recorded-visit',at:'2026-10-16T01:30:00Z'}],schedules:[{effectiveFrom:'2026-10-12',days:['mon','wed','fri']}],coverage:[{start:'2026-10-01',end:'2026-10-30'}]});
    else if(method==='GET'&&path==='/api/reports/attendance') {
-    const rows=structuredClone(f.visits),gate=f.reportGate;
+    const rows=structuredClone(f.visits),gate=f.reportGate,status=f.reportStatus||200;
     if(gate)await gate;
+    if(status!==200)return route.fulfill({status,contentType:'application/json',body:JSON.stringify({error:'Previous staff session expired.'})});
     if(f.reportError)return route.fulfill({status:502,contentType:'application/json',body:JSON.stringify({error:'Attendance could not be loaded.'})});
     const from=url.searchParams.get('from'),to=url.searchParams.get('to'),plan=url.searchParams.get('plan');
     const visits=rows.filter(v=>v.date>=from&&v.date<=to&&(plan==='all'||v.plan===f.plans.find(p=>p.id===plan)?.name));
@@ -118,15 +122,15 @@ describe('dedicated Attendance sections',{concurrency:false},()=>{
   const f=fixture('member'),page=await open(f);
   try {
    assert.equal(await page.locator('a.nav-link[href="#/member/attendance"]').count(),1);
-   assert.equal(await page.locator('.attendance-page .my-visits').count(),1);
-   assert.match(await page.locator('.my-visits').innerText(),/This month: 1 visit/);
-   assert.match(await page.locator('.my-visits').innerText(),/9:30 AM/);
+   await page.locator('#attendance-tracker-summary').waitFor();
+   assert.equal(await page.locator('.attendance-page #member-attendance').count(),1);
+   assert.match(await page.locator('#member-attendance-history').innerText(),/0?9:30\s*am/i);
    assert.doesNotMatch(await page.locator('.attendance-page').innerText(),/Second Member|Gym staff/);
    assert.equal(await page.locator('.attendance-page [data-action="member-qr"]').count(),1);
    assert.equal(await page.locator('[data-action="scanner"],#attendance-form').count(),0);
-   await page.evaluate(()=>navigate('members'));assert.equal(await page.locator('.my-visits,.attendance-panel').count(),0);
-   await page.evaluate(()=>navigate('overview'));assert.equal(await page.locator('.my-visits').count(),0);
-   await page.locator('.member-attendance-link a').click();await page.locator('.my-visits').waitFor();assert.equal(await page.locator('.my-visits').count(),1);
+   await page.evaluate(()=>navigate('members'));assert.equal(await page.locator('#member-attendance,.attendance-panel').count(),0);
+   await page.evaluate(()=>navigate('overview'));assert.equal(await page.locator('#member-attendance').count(),0);
+   await page.locator('.member-attendance-link a').click();await page.locator('#attendance-tracker-summary').waitFor();assert.equal(await page.locator('#member-attendance').count(),1);
    assert.equal(f.reads.some(p=>p.startsWith('/api/reports/attendance')),false);
    assert.deepEqual(f.requests,[]);clean(f);
   }finally{await page.close();}
@@ -154,7 +158,7 @@ describe('dedicated Attendance sections',{concurrency:false},()=>{
    if(scenario==='inactive')f.members[0].enabled=false;
    const page=await open(f);
    try {
-    assert.equal(await page.locator('.attendance-page .my-visits').count(),1);
+    assert.equal(await page.locator('.attendance-page #member-attendance').count(),1);
     assert.equal(await page.locator('.attendance-page [data-action="member-qr"]:enabled').count(),0,scenario);
     await page.evaluate(()=>memberQR());
     await page.locator('#modal-title').filter({hasText:'Your member pass'}).waitFor();
@@ -165,18 +169,22 @@ describe('dedicated Attendance sections',{concurrency:false},()=>{
   }
  });
 
- test('late staff report responses are discarded after logout and member sign-in',async()=>{
-  const f=fixture();let release;f.reportGate=new Promise(resolve=>{release=resolve;});const page=await open(f);
+ test('late staff report data and 401 responses are discarded after logout and member sign-in',async()=>{
+  for(const reportStatus of [200,401]) {
+  const f=fixture();f.reportStatus=reportStatus;let release;f.reportGate=new Promise(resolve=>{release=resolve;});const page=await open(f);
   try {
    await page.locator('[aria-label="Log out"]').click();await page.getByRole('heading',{name:'Good to see you.',exact:true}).waitFor();
    const member=fixture('member');Object.assign(f,{role:member.role,user:member.user,members:member.members});
    await page.evaluate(()=>boot());await page.getByRole('link',{name:'Attendance',exact:true}).click();
    release();await page.waitForFunction(()=>currentUser?.role==='member'&&section==='attendance');
+   await page.locator('#attendance-tracker-summary').waitFor();
+   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
    assert.equal(await page.locator('.attendance-panel').count(),0);
-   assert.equal(await page.locator('.my-visits').count(),1);
+   assert.equal(await page.locator('#member-attendance').count(),1);
    assert.doesNotMatch(await page.locator('.attendance-page').innerText(),/Second Member/);
    assert.equal(await page.evaluate(()=>currentUser.role),'member');clean(f);
   }finally{release();await page.close();}
+  }
  });
 
  test('dedicated attendance and normal header/logout fit desktop and phone layouts for every role',async()=>{

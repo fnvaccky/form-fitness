@@ -18,8 +18,12 @@ async function loadAttendance(){
  const query=new URLSearchParams({from:attendance.from,to:attendance.to,plan:attendance.plan});
  render();
  try{
-  const data=await api(`/reports/attendance?${query}`);
+  // Check the requesting account before acting on an HTTP error as well as successful data.
+  // The shared API helper clears authentication on 401, which a previous account's reply must not do.
+  const response=await fetch(`/api/reports/attendance?${query}`,{credentials:'same-origin',cache:'no-store'});
+  const data=await response.json();
   if(owner!==attendanceOwner()||request!==attendance.request)return;
+  if(!response.ok)throw Error(data.error||'Attendance could not be loaded. Please try again.');
   attendance.data=data;
  }catch(error){
   if(owner!==attendanceOwner()||request!==attendance.request)return;
@@ -71,7 +75,7 @@ function attendancePage(){
  const operational=mode==='admin'&&can('roster');
  const activeMember=currentUser?.role==='member'&&memberStatus(memberById(currentUser.memberId))==='Active';
  const actions=operational&&can('scan')?btn('Scan member','scanner','primary','','card'):activeMember?btn('Show my member QR','member-qr','primary','','card'):'';
- const accessNote=currentUser?.role==='member'&&!activeMember?'<div class="notice">Your attendance history stays available. An active, fully paid current membership is required for a check-in pass.</div>':'';
+ const accessNote=currentUser?.role==='member'&&!activeMember?'<div class="notice">An enabled account and active, fully paid current membership are required for a check-in pass. This tracker does not grant check-in access.</div>':'';
  return `<div class="attendance-page">${heading('Attendance',operational?'Verify member passes and review recorded gym visits.':'Your recorded gym visits and usual training days.',actions,'GYM VISITS')}${accessNote}${operational?attendancePanel():(window.memberAttendanceTracker?.()||memberAttendancePage())}</div>`;
 }
 

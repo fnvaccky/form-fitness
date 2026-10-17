@@ -7,6 +7,7 @@ import {createCheckout,reconcileCheckout,recoverCheckout,cancelCheckout,handleWe
 import {createStaff,updateStaff,setStaffEnabled,resendStaffSetup} from './staff.js';
 import {createMember} from './members.js';
 import {attendanceReport,checkinStatus} from './attendance.js';
+import {memberAttendance} from './member-attendance.js';
 import {validateSurvey,surveyView} from './survey.js';
 import {saveMemberHealth} from './member-health.js';
 import {planRequest} from './plans.js';
@@ -152,6 +153,10 @@ export async function handle(req,res,env=process.env) {
     }
     // 13A: the member's pass screen asks whether they have checked in today; only their own row is read.
     if(path==='/checkin-status' && req.method==='GET'){if(profile.role!=='member')fail('Sign in as a member.',403);return send(res,200,await checkinStatus(client,profile,today()));}
+    if(path==='/member-attendance' && req.method==='GET'){
+      const query=new URLSearchParams(url.searchParams);query.delete('__path');query.delete('path');
+      return send(res,200,await memberAttendance(client,profile,Object.fromEntries(query),today()));
+    }
     // Task 13: attendance for gym staff, read through the caller's session (RLS keeps it to their workspace).
     if(path==='/reports/attendance' && req.method==='GET'){gymStaff();return send(res,200,await attendanceReport(client,Object.fromEntries(url.searchParams),today()));}
     if(req.method!=='POST')fail('Endpoint not found.',404);

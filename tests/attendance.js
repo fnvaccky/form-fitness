@@ -180,15 +180,23 @@ try{
  pass('Browser: dedicated Attendance (last 7 days by default, totals, newest-first table, plan filter, Apply), CSV export with its file name and formula guard, dashboard visits and phone layouts');
 
  const me=await signIn(history);await me.evaluate(()=>navigate('attendance'));
- const panel=me.locator('.my-visits');await panel.waitFor();
- assert.match(await panel.innerText(),new RegExp(`This month: ${memberState.visits.thisMonth} visits?`));
- assert.match(await panel.innerText(),new RegExp(`Last visit: [^\\n]*${memberState.visits.last.time}`),'the last visit, with its time');
- assert.match(await panel.locator('tbody tr').first().innerText(),/\d{1,2}:\d\d [AP]M/,'12-hour times');
- assert.equal(await panel.locator('tbody tr').count(),30);
+ await me.locator('#attendance-tracker-summary').waitFor();
+ await me.locator('#member-attendance-period').selectOption('month');
+ await me.locator('#member-attendance-form').getByRole('button',{name:'Apply',exact:true}).click();
+ await me.waitForFunction(()=>document.querySelector('#attendance-calendar .attendance-calendar')?.classList.contains('month'));
+ const expectedTracker=await memberApi.get('/member-attendance'+qs({period:'month',date:today()}));
+ const panel=me.locator('#member-attendance');
+ assert.deepEqual(await panel.locator('#attendance-tracker-summary strong').allInnerTexts(),[
+  String(expectedTracker.summary.attendedDays),String(expectedTracker.summary.events),
+  expectedTracker.summary.percentage===null?'Not enough history yet':`${expectedTracker.summary.percentage}%`
+ ]);
+ assert.equal(await panel.locator('#member-attendance-history tbody tr').count(),expectedTracker.history.length,'the selected calendar month, rather than a truncated last-30 list');
+ if(expectedTracker.history.length)assert.match(await panel.locator('tbody tr').first().innerText(),/\d{1,2}:\d\d\s*[AP]M/i,'12-hour times');
+ assert.equal(await panel.locator('.attendance-calendar-day').count(),expectedTracker.days.length);
  await shot(me,'attendance-my-visits');
  assert.equal(await me.locator('[data-tab="attendance"]').count(),0);
  assert.deepEqual(errors,[],'no JavaScript errors');
- pass('Browser: My visits shows this month\'s count, the last visit and the member\'s last 30 visits; members get their own Attendance navigation');
+ pass('Browser: the owner-only Attendance tracker shows the selected calendar month, distinct days, event totals and its history; members get dedicated Attendance navigation');
  console.log(`PASS: ${passed.length} attendance checks`);
 }finally{
  if(browser)await browser.close();prod?.server.close();demo?.server.close();

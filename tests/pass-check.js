@@ -103,8 +103,9 @@ try{
  await member.getByRole('button',{name:'Close',exact:true}).click();
  const time=desktopDone.shown.match(/Checked in — (\d{1,2}:\d\d [AP]M)/)[1];
  await member.getByRole('link',{name:'Attendance',exact:true}).click();
- assert.match(await member.locator('.my-visits').innerText(),new RegExp(`This month: 1 visit[^s][\\s\\S]*Last visit: [^\\n]*${time}`),'My visits already has the visit');
- assert.match(await member.locator('.my-visits tbody tr').first().innerText(),new RegExp(time));
+ await member.locator('#attendance-tracker-summary').waitFor();
+ assert.deepEqual((await member.locator('#attendance-tracker-summary strong').allInnerTexts()).slice(0,2),['1','1'],'one distinct day and one check-in event');
+ assert.match(await member.locator('#member-attendance-history tbody tr').first().innerText(),new RegExp('0?'+time.replace(' ','\\s*'),'i'),'the tracker already has the confirmed visit');
  await member.getByRole('link',{name:'My overview',exact:true}).click();
  const reopened=member.waitForResponse(r=>r.url().endsWith('/api/checkin-status'));await member.getByRole('button',{name:'Show my member QR',exact:true}).click();await reopened;
  await member.locator('.checked-in').filter({hasText:`Already checked in today at ${time}`}).waitFor();
