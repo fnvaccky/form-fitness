@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { serverClient, serviceClient, configuration, result } from './supabase.js';
 import { HttpError, fail, contacts, password, passwordRefusal, startDate, cents, imageData, today } from './validation.js';
-import { BUCKET, stateFor, planView, paymentView, userView, signedImage } from './state.js';
+import { BUCKET, stateFor, memberFor, planView, paymentView, userView, signedImage } from './state.js';
 import { fulfillRegistration } from './onboarding.js';
 import {createCheckout,reconcileCheckout,recoverCheckout,cancelCheckout,handleWebhook} from './paymongo.js';
 import {createStaff,updateStaff,setStaffEnabled,resendStaffSetup} from './staff.js';
@@ -268,7 +268,7 @@ export async function handle(req,res,env=process.env) {
     const data=await rpc(path.slice(1),body);
     if(viaCode)data.token=body.token;
     if(data.payment)data.payment=paymentView(data.payment);
-    if(data.member){const snapshot=await stateFor(client,profile,env);data.member=snapshot.members.find(m=>m.id===data.member.id)||data.member;}
+    if(data.member)data.member=await memberFor(client,profile,data.member.id)||data.member;
     if(['payments','review-payment','check-in','renew'].includes(path.slice(1)) && env.GMAIL_ADDRESS && env.GMAIL_APP_PASSWORD && env.SUPABASE_SECRET_KEY) {
       await flushEmails(env).catch(()=>{}); // Committed business records remain successful if delivery fails.
     }

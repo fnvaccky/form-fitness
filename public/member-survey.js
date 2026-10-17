@@ -21,6 +21,34 @@ const surveyLabel = (options, value) => options.find(([key]) => key === value)?.
 let surveyThanks = false;
 let fitnessProfileSavingMember = null;
 let fitnessProfilePendingDraft = null;
+// Unsaved optional fields stay in memory for this authenticated owner only. A background state
+// refresh or a trip to another page must not replace an editor with its older saved answers.
+let fitnessProfileEditorDraft = null;
+const fitnessProfileOwner = () => currentUser?.role === 'member' ? `${authEpoch}:${currentUser.id || ''}:${currentUser.memberId}:${currentUser.workspace || ''}` : '';
+function captureFitnessProfileDraft() {
+  const form = document.getElementById('member-survey-form'), owner = fitnessProfileOwner();
+  if (!owner || !form || form.dataset.saving === 'true' || form.dataset.discardDraft === 'true') return;
+  fitnessProfileEditorDraft = {owner,first:form.dataset.first,fields:[...form.querySelectorAll('input,select')].map(input=>({id:input.id,value:input.value,checked:input.checked})),
+    errors:[...form.querySelectorAll('#survey-errors,.survey-field-error,#member-health-error')].map(node=>({id:node.id,text:node.textContent,hidden:node.hidden}))};
+}
+function restoreFitnessProfileDraft() {
+  const form = document.getElementById('member-survey-form'), draft = fitnessProfileEditorDraft;
+  if (!form || !draft || draft.owner !== fitnessProfileOwner() || form.dataset.saving === 'true') return;
+  form.dataset.first = draft.first;
+  for (const field of draft.fields) { const input = form.querySelector(`#${field.id}`); if (input) { input.value = field.value; if (input.type === 'checkbox') input.checked = field.checked; } }
+  for (const field of draft.errors) { const node = form.querySelector(`#${field.id}`); if (node) { node.textContent = field.text; node.hidden = field.hidden; } }
+  form.querySelector('#health-height')?.dispatchEvent(new Event('input',{bubbles:true}));
+}
+function discardFitnessProfileDraft() {
+  fitnessProfileEditorDraft = null;
+  const form = document.getElementById('member-survey-form');
+  if (form) form.dataset.discardDraft = 'true';
+}
+document.addEventListener('repready-auth-changing', () => {
+  surveyThanks = false; fitnessProfileSavingMember = null; fitnessProfilePendingDraft = null;
+  fitnessProfileEditorDraft = null;
+  window.fitnessProfileSaveState = null;
+});
 // A fully paid cycle that is current or still to come: such a member keeps using the app while the survey waits.
 const hasPaidCycle = member => state.invoices.some(i => i.memberId === member.id && i.paidCents >= i.amountCents && i.end >= DEMO_DATE);
 const surveyCard = () => '<section class="panel survey-card" aria-label="Fitness profile"><p><strong>Complete your fitness profile</strong> — it takes a minute and helps us recommend the right plan.</p><button class="button primary" data-action="survey-open">Complete fitness profile</button></section>';
@@ -73,7 +101,7 @@ function surveyForm(member, first = false) {
 
 function memberSurveyPanel(member, editing = false) {
   const own = currentUser?.role === 'member' && currentUser.memberId === member.id;
-  const editor = own && (!member.survey || editing || fitnessProfileSavingMember === member.id);
+  const editor = own && (!member.survey || editing || fitnessProfileSavingMember === member.id || fitnessProfileEditorDraft?.owner === fitnessProfileOwner());
   return `<section id="fitness-survey" class="panel survey-panel" aria-labelledby="survey-title"><div class="panel-header"><div><h2 id="survey-title" tabindex="-1">${own?'Your fitness profile':'Member fitness survey'}</h2><p>${own?'Your goal, experience, exercise preferences and usual days.':'Preferences shared by this member.'}</p></div>${own&&member.survey&&!editor?'<button class="button small" data-action="survey-edit">Edit answers</button>':''}</div><div class="survey-body"><p class="survey-privacy">${own?'Your goal and training preference answers are visible to your gym’s staff and administrators. They help guide a conversation about your training.':'Only the member can update these answers.'}</p>${editor?surveyForm(member):surveySummary(member)+(own?(window.memberHealthPanel?.(member)||''):'')}<p id="survey-status" class="survey-status" role="status" tabindex="-1"></p></div></section>`;
 }
 
@@ -87,12 +115,13 @@ function replaceSurvey(editing = false) {
   const member = memberById(currentUser?.memberId);
   if (!member || currentUser.role !== 'member') return;
   if (document.querySelector('#member-survey-form[data-saving="true"]')) return;
-  if (!editing) window.fitnessProfileSaveState = null;
+  if (!editing) { window.fitnessProfileSaveState = null; discardFitnessProfileDraft(); }
   if (document.querySelector('.survey-first')) {
     if (member.survey) {
       // Required answers may already be confirmed after a partial optional save failure.
       surveyThanks = true; mode = 'member'; section = 'overview';
       if (location.hash !== '#/member/overview') history.replaceState({}, '', '#/member/overview');
+      lastPortalRouteHash = location.hash;
       render();
     } else {
       // Cancel resets both drafts without skipping the required first-login survey.
@@ -108,6 +137,7 @@ function replaceSurvey(editing = false) {
     return;
   }
   document.getElementById('fitness-survey').outerHTML = memberSurveyPanel(member, editing);
+  restoreFitnessProfileDraft();
   refreshFitnessDerived(member);
   document.getElementById(editing?'survey-goal':'survey-title').focus();
 }
@@ -146,16 +176,19 @@ function deskSurveyAnswers() {
 {
   const surveyBaseRender = render, surveyBaseMembership = memberMembership, surveyBaseOverview = memberOverview, surveyBaseProfile = profile, surveyBaseSelectPlan = selectPlan;
   render = function() {
+    captureFitnessProfileDraft();
     const member = authReady && currentUser?.role === 'member' ? memberById(currentUser.memberId) : null;
     if (member && !member.survey && !hasPaidCycle(member)) {
       // Keep answers already chosen if something asks for a fresh render while the member is filling it in.
       if (document.querySelector('.survey-first #member-survey-form')) return;
       document.title = 'RepReady · Welcome';
       document.getElementById('app').innerHTML = firstSurveyScreen(member);
+      restoreFitnessProfileDraft();
       return;
     }
     if (section !== 'overview') surveyThanks = false;
     surveyBaseRender();
+    restoreFitnessProfileDraft();
   };
   memberMembership = function() {
     const member = memberById(selectedMember), marker = '<div class="panel-header" style="padding-left:0">';
@@ -212,6 +245,7 @@ document.addEventListener('submit', async event => {
   event.preventDefault(); event.stopImmediatePropagation();
   if (form.dataset.saving === 'true' || currentUser?.role !== 'member') return;
   if (fitnessProfileSavingMember === currentUser.memberId) { toast('Your fitness profile is still saving.'); return; }
+  const savingEpoch = authEpoch;
   const data = new FormData(form);
   const answers = {goal:data.get('goal'),experience:data.get('experience'),exercises:data.getAll('exercises'),availableDays:data.getAll('availableDays')};
   const problems = [];
@@ -258,7 +292,7 @@ document.addEventListener('submit', async event => {
     if (!sameHealth) jobs.push({section:'health',request:api('/member-health',health)});
     const results = await Promise.allSettled(jobs.map(job => job.request));
     // A member may navigate or sign out while the save is in flight.
-    if (currentUser?.role !== 'member' || currentUser.memberId !== memberId) return;
+    if (savingEpoch !== authEpoch || currentUser?.role !== 'member' || currentUser.memberId !== memberId) return;
     member = memberById(memberId);
     if (!member) return;
     const paid = hasPaidCycle(member);
@@ -289,6 +323,7 @@ document.addEventListener('submit', async event => {
       return;
     }
     window.fitnessProfileSaveState = null;
+    discardFitnessProfileDraft();
     if (first && paid) {
       // A paid member answered from the card: stay here; the card goes.
       render();
@@ -301,6 +336,7 @@ document.addEventListener('submit', async event => {
       // The first save opens the app: thanks, and on to plan selection (or the overview if a plan exists).
       surveyThanks = true; mode = 'member'; section = 'overview';
       if (location.hash !== '#/member/overview') history.replaceState({}, '', '#/member/overview');
+      lastPortalRouteHash = location.hash;
       render();
       document.querySelector('.survey-thanks, .page-heading h1, h1')?.focus?.();
       toast(member.start ? 'Thanks! Your fitness profile is saved.' : 'Thanks! Choose your plan next.');
@@ -313,8 +349,10 @@ document.addEventListener('submit', async event => {
     }
     toast('Fitness profile saved.');
   } catch (error) {
+    if (savingEpoch !== authEpoch || isStaleResponse(error)) return;
     if (form.isConnected) { summary.hidden = false; summary.textContent = error.message; summary.focus(); }
   } finally {
+    if (savingEpoch !== authEpoch) return;
     if (fitnessProfileSavingMember === memberId) { fitnessProfileSavingMember = null; fitnessProfilePendingDraft = null; }
     if (form.isConnected) { form.dataset.saving = 'false'; form.removeAttribute('aria-busy'); controls.forEach(control => control.disabled = false); submit.textContent = 'Save fitness profile'; }
     const activeForm = document.getElementById('member-survey-form');

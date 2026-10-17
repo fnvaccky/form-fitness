@@ -18,6 +18,11 @@ export async function memberProgress(client,profile,query,today) {
   member(profile);
   if(Object.keys(query).length)fail('Progress reads do not accept member, workspace or other query fields.');
   result(await client.rpc('ff_member_progress',{body:{action:'read'}}));
+  return progressSnapshot(client,profile,today);
+}
+// A successful mutation has already checked the enabled, current database actor. Re-read its
+// confirmed rows through the same authenticated RLS client without a duplicate validation RPC.
+async function progressSnapshot(client,profile,today) {
   // Dedicated owner-only endpoint: no private data is added to shared state, rosters or exports.
   const [goalRows,weightRows,health]=await Promise.all([
     rows(client,'ff_member_goals','id,period_id,goal_type,status,start_date,starting_weight_kg,measurement_date,target_weight_kg,recorded_at,ended_at',profile),
@@ -33,5 +38,5 @@ export async function saveMemberProgress(client,profile,body,today) {
   member(profile);let request;
   try{request=validateProgressMutation(body,today);}catch(error){fail(error.message);}
   result(await client.rpc('ff_member_progress',{body:request}));
-  return memberProgress(client,profile,{},today);
+  return progressSnapshot(client,profile,today);
 }

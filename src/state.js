@@ -30,6 +30,28 @@ export async function signedImage(client, path) {
   if (!path) return '';
   return result(await client.storage.from(BUCKET).createSignedUrl(path, 300)).signedUrl;
 }
+async function memberView(client, profile, cycles, survey, current) {
+  const own = cycles.filter(c=>c.member_id===profile.id).sort((a,b)=>a.start_date.localeCompare(b.start_date));
+  const cycle = own.find(c=>c.start_date<=current && c.end_date>=current) || own.find(c=>c.start_date>current) || own.at(-1);
+  return { id:profile.id,name:profile.name,email:profile.email,phone:profile.phone,goal:profile.goal,survey:survey||null,enabled:profile.enabled,photo:await signedImage(client,profile.photo),photoPath:profile.photo,plan:cycle?.plan_id,terms:termsView(cycle?.terms,cycle?.plan_id),start:cycle?.start_date,end:cycle?.end_date,joined:datePH(profile.created_at) };
+}
+// A confirmed scan needs only that member's authorized operational projection, not another entire
+// workspace snapshot. The caller's authenticated client and explicit scope preserve the same RLS.
+export async function memberFor(client, actor, memberId) {
+  const memberRows = async table => {
+    const rows=[];
+    for(let from=0;;from+=1000) {
+      const page=result(await client.from(table).select('*').eq('workspace',actor.workspace).eq('member_id',memberId).order('id').range(from,from+999));
+      rows.push(...page);if(page.length<1000)return rows;
+    }
+  };
+  const [profile,cycles,survey]=await Promise.all([
+    client.from('ff_profiles').select('*').eq('workspace',actor.workspace).eq('id',memberId).eq('role','member').maybeSingle().then(result),
+    memberRows('ff_memberships'),
+    client.from('ff_member_surveys').select('*').eq('workspace',actor.workspace).eq('id',memberId).maybeSingle().then(result)
+  ]);
+  return profile ? memberView(client,profile,cycles,surveyView(survey),today()) : null;
+}
 export async function stateFor(client, profile, env) {
   const current = today(), gymStaff = ['admin','staff'].includes(profile.role);
   // A member's own latest visits (RLS limits members to their own rows anyway); staff get the workspace's.
@@ -52,11 +74,7 @@ export async function stateFor(client, profile, env) {
     memberHealthFor(client,profile)
   ]);
   const surveyByMember = new Map(surveys.map(row=>[row.id,surveyView(row)]));
-  const members = await Promise.all(profiles.filter(p=>p.role==='member').map(async p=> {
-    const own = cycles.filter(c=>c.member_id===p.id).sort((a,b)=>a.start_date.localeCompare(b.start_date));
-    const cycle = own.find(c=>c.start_date<=current && c.end_date>=current) || own.find(c=>c.start_date>current) || own.at(-1);
-    return { id:p.id,name:p.name,email:p.email,phone:p.phone,goal:p.goal,survey:surveyByMember.get(p.id)||null,enabled:p.enabled,photo:await signedImage(client,p.photo),photoPath:p.photo,plan:cycle?.plan_id,terms:termsView(cycle?.terms,cycle?.plan_id),start:cycle?.start_date,end:cycle?.end_date,joined:datePH(p.created_at) };
-  }));
+  const members = await Promise.all(profiles.filter(p=>p.role==='member').map(p=>memberView(client,p,cycles,surveyByMember.get(p.id),current)));
   const destinations = {};
   for (const [key, value] of Object.entries(settings.payments || {})) destinations[key] = {...value,imagePath:value.image,image:await signedImage(client,value.image)};
   return {
