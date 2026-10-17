@@ -1,10 +1,8 @@
-/* Private member goals sit beside, rather than replace, the existing attendance tracker. */
+/* Member-only goal page. The attendance tracker keeps its own route and styling. */
 .member-progress{margin-top:0;min-width:0;color:var(--ink)}
 .member-progress .panel-header h2{font-size:18px;font-weight:600}
 .member-progress .panel-header p,.progress-note,.progress-empty p{font-size:13px;line-height:1.7;color:var(--muted)}
 .member-progress-body{padding:0 24px 24px;min-width:0}
-.progress-tabs{margin-top:0}
-.progress-tabs .tab{min-height:44px}
 .member-progress h3{font-size:16px;line-height:1.5;font-weight:600;margin:0 0 12px}
 .progress-empty{padding:16px 0 20px}
 .progress-actions,.progress-row-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
@@ -13,8 +11,8 @@
 .progress-goal-heading{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px;margin:22px 0}
 .progress-goal-heading h3{display:inline-block;margin:0 10px 0 0}
 .progress-goal-heading p{font-size:13px;line-height:1.6;color:var(--muted);margin:10px 0 0}
-.progress-values{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:0}
-.progress-values>div{border:1px solid var(--line);border-radius:9px;padding:16px;min-width:0;background:#fafcf8}
+.progress-values{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0}
+.progress-values>div{border:1px solid var(--line);border-radius:9px;padding:12px 14px;min-width:0;background:#fafcf8}
 .progress-values dt{font-size:13px;color:var(--muted);line-height:1.5}
 .progress-values dd{font-size:18px;font-weight:600;line-height:1.5;margin:8px 0;overflow-wrap:anywhere}
 .progress-values small{display:block;font-size:12px;line-height:1.6;color:var(--muted)}
@@ -39,17 +37,27 @@
 .progress-editor .form-error{font-size:13px;line-height:1.6;overflow-wrap:anywhere;margin:0 0 14px}
 .member-progress .form-error[hidden]{display:none}
 #progress-status{font-size:13px;line-height:1.7;color:var(--green);min-height:1em;overflow-wrap:anywhere}
-.progress-measurements,.progress-attendance-summary{margin-top:28px;padding-top:24px;border-top:1px solid var(--line)}
+.progress-measurements{margin-top:28px;padding-top:24px;border-top:1px solid var(--line)}
 .progress-measurements .data-table{min-width:0;width:100%}
 .progress-measurements .data-table th,.progress-measurements .data-table td{padding:14px 12px;white-space:normal;font-size:13px;line-height:1.6}
-.progress-attendance-summary p{font-size:13px;line-height:1.7;color:var(--muted)}
-.progress-attendance-summary a{color:var(--green);text-decoration:underline}
+.member-progress a{color:var(--green);text-decoration:underline}
+.progress-history-heading{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:12px}
+.progress-history-heading h3{margin:0}
+.progress-settings{margin:20px 0 0}
+.progress-source{margin-top:20px!important;margin-bottom:16px!important}
+.progress-editor .checkline{margin:12px 0}
+.progress-help{font-size:12px;line-height:1.7;color:var(--muted);margin:14px 0}
+.progress-help summary{cursor:pointer;padding:8px 0;min-height:36px;font-weight:600}
+.progress-help p{margin:6px 0 12px}
+.progress-drafts,.progress-existing{border:1px solid var(--line);background:#f1f5ee;border-radius:8px;padding:12px 16px;font-size:13px;line-height:1.7;margin:20px 0}
+.progress-drafts p,.progress-existing p{margin:0 0 10px}
+.progress-disclaimer{margin-top:26px}
 .progress-history{margin-top:24px;font-size:13px;line-height:1.7}
 .progress-history summary{cursor:pointer;min-height:44px;padding:8px 0;font-weight:600}
 .progress-history li{padding:10px 0}
 .progress-history small{display:block;color:var(--muted)}
 .member-progress .notice{font-size:13px;line-height:1.7;overflow-wrap:anywhere}
 .member-progress .notice .progress-actions{margin-top:12px}
-.member-progress :is(button,input,select,a,summary):focus-visible,.progress-tabs button:focus-visible{outline:2px solid var(--ink);outline-offset:3px}
+.member-progress :is(button,input,select,a,summary):focus-visible{outline:2px solid var(--ink);outline-offset:3px}
 .member-progress .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-@media(max-width:680px){.member-progress-body{padding:0 18px 20px}.progress-editor{padding:16px 12px}.progress-editor .form-grid,.progress-values{grid-template-columns:1fr}.progress-values dd{font-size:17px}.progress-goal-heading .progress-actions{width:100%}.progress-goal-heading .button{flex:1 1 auto}.progress-measurements .data-table th,.progress-measurements .data-table td{padding:12px 6px;font-size:12px}.progress-row-actions{gap:6px}.progress-row-actions .button{font-size:11px;padding:7px 9px}.progress-tabs .tab{flex:1;justify-content:center}.progress-editor .progress-actions .button{flex:1 1 auto}.progress-history ul{padding-left:20px}}
+@media(max-width:680px){.member-progress-body{padding:0 18px 20px}.progress-editor{padding:16px 12px}.progress-editor .form-grid,.progress-values{grid-template-columns:1fr}.progress-values dd{font-size:17px}.progress-goal-heading .progress-actions{width:100%}.progress-goal-heading>.button{width:100%}.progress-settings .button{flex:1 1 auto}.progress-measurements .data-table th,.progress-measurements .data-table td{padding:12px 6px;font-size:12px}.progress-row-actions{gap:6px}.progress-row-actions .button{font-size:11px;padding:7px 9px}.progress-editor .progress-actions .button{flex:1 1 auto}.progress-history ul{padding-left:20px}.progress-drafts,.progress-existing{padding:12px}.progress-history-heading>.button{width:100%}}

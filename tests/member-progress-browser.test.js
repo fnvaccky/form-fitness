@@ -52,7 +52,7 @@ describe('member goals and progress browser',{concurrency:false},()=>{
  let server,origin,browser;
  before(async()=>{const env={};server=createDevServer(env);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));origin=env.APP_ORIGIN=`http://127.0.0.1:${server.address().port}`;browser=await chromium.launch({headless:true,channel:process.env.TEST_BROWSER_CHANNEL||'msedge'});});
  after(async()=>{await browser?.close();if(server)await new Promise(resolve=>server.close(resolve));});
- async function open(f,{view=f.role==='member'?'member':'admin',section='attendance',delayedModule=false}={}) {
+ async function open(f,{view=f.role==='member'?'member':'admin',section='goal',delayedModule=false}={}) {
   const page=await browser.newPage({viewport:{width:1440,height:1000}});page.setDefaultTimeout(5000);
   page.on('pageerror',error=>f.errors.push(error.message));
   await page.addInitScript(()=>document.addEventListener('repready-ready',()=>{window.progressBrowserReady=true;}));
@@ -80,7 +80,9 @@ describe('member goals and progress browser',{concurrency:false},()=>{
   await page.goto(`${origin}/#/${view}/${section}`);await page.waitForFunction(()=>window.progressBrowserReady);return page;
  }
  const clean=f=>{assert.deepEqual(f.errors,[]);assert.deepEqual(f.unexpected,[]);};
- const progress=async page=>{await page.getByRole('tab',{name:'My progress',exact:true}).click();await page.locator('#member-progress').waitFor();await page.waitForFunction(()=>document.querySelector('#member-progress')&&!document.querySelector('#member-progress').hasAttribute('aria-busy'));};
+ const progress=async page=>{if(!page.url().endsWith('/member/goal'))await page.getByRole('link',{name:'My goal',exact:true}).click();await page.locator('#member-progress').waitFor();await page.waitForFunction(()=>document.querySelector('#member-progress')&&!document.querySelector('#member-progress').hasAttribute('aria-busy'));};
+ const record=async page=>{if(!await page.locator('#progress-weight-form').count())await page.locator('[data-action="progress-record-weight"]').click();};
+ const customStart=async(page,date)=>{if(!await page.locator('#progress-goal-form [name="startDate"]').isVisible())await page.locator('#progress-different-start').check();await start(page).fill(date);};
  const goalType=page=>page.locator('#progress-goal-form [name="goalType"]');
  const start=page=>page.locator('#progress-goal-form [name="startDate"]');
  const starting=page=>page.locator('#progress-goal-form [name="startingWeightKg"]');
@@ -90,21 +92,21 @@ describe('member goals and progress browser',{concurrency:false},()=>{
  const editNew=page=>page.locator('[data-action="progress-start-goal"]').click();
  async function setup(page,type='gain',{weight='60',targetWeight='65'}={}) {
   await goalType(page).selectOption(type);
-  await start(page).fill('2026-10-12');
+  await customStart(page,'2026-10-12');
   if(type!=='attendance') {await starting(page).fill(weight);await measured(page).fill('2026-10-12');if(type!=='maintain')await target(page).fill(targetWeight);}
  }
 
  test('restored session preserves attendance and opens one private progress panel without auto-creating a suggested goal',async()=>{
-  const f=fixture(),page=await open(f,{delayedModule:true});
+  const f=fixture(),page=await open(f,{section:'attendance',delayedModule:true});
   try {
-   assert.equal(await page.getByRole('link',{name:'Attendance & Progress',exact:true}).count(),1);
+   assert.equal(await page.getByRole('link',{name:'Attendance',exact:true}).count(),1);assert.equal(await page.getByRole('link',{name:'My goal',exact:true}).count(),1);assert.equal(await page.getByRole('tab').count(),0);assert.equal(await page.locator('#progress-goal-form,#progress-weight-form').count(),0);assert.equal(f.reads.some(path=>path.startsWith('/api/member-progress')),false);
    await page.locator('#attendance-tracker-summary').waitFor();
    assert.match(await page.locator('#attendance-tracker-summary').innerText(),/2\s*\/\s*3/);
    assert.match(await page.locator('#attendance-tracker-summary').innerText(),/66\.7%/);
    await progress(page);assert.equal(await page.locator('#member-progress').count(),1);
-   assert.match(await page.locator('#member-progress').innerText(),/attendance consistency/i);
+   assert.equal(await page.locator('#progress-attendance-summary,#member-attendance').count(),0);assert.equal(await page.locator('#progress-goal-form,#progress-weight-form').count(),0);
    assert.equal(f.posts.length,0,'survey suggestion does not create a goal');
-   await page.getByRole('tab',{name:'Attendance',exact:true}).click();await page.locator('#attendance-tracker-summary').waitFor();
+   await page.getByRole('link',{name:'Attendance',exact:true}).click();await page.locator('#attendance-tracker-summary').waitFor();
    assert.match(await page.locator('#attendance-tracker-summary').innerText(),/2\s*\/\s*3/);
    await page.reload();await page.waitForFunction(()=>window.progressBrowserReady);await progress(page);assert.equal(await page.locator('#member-progress').count(),1);assert.equal(f.posts.length,0);clean(f);
   }finally{await page.close();}
@@ -125,18 +127,18 @@ describe('member goals and progress browser',{concurrency:false},()=>{
   }
  });
 
- test('saved health weight is a labeled prefill but its date must be confirmed and validation submits nothing',async()=>{
+ test('health starting weight is optional, never auto-selected, and requires an actual date; invalid settings submit nothing',async()=>{
   const f=fixture(),page=await open(f);
   try {
    await progress(page);await editNew(page);await goalType(page).selectOption('lose');
-   assert.equal(await starting(page).inputValue(),'70');assert.equal(await measured(page).inputValue(),'');
+   assert.equal(await starting(page).inputValue(),'');assert.equal(await measured(page).inputValue(),'');assert.equal(await page.locator('#progress-different-start').isChecked(),false);await page.locator('#progress-starting-source').selectOption('health');assert.equal(await starting(page).inputValue(),'70');
    assert.match(await page.locator('#member-progress').innerText(),/health profile|health-profile/i);
    assert.match(await page.locator('#member-progress').innerText(),/12 Oct 2026|12 October 2026/);
    await target(page).fill('75');await saveGoal(page);assert.equal(f.posts.length,0);
    await measured(page).fill('2026-10-12');await saveGoal(page);assert.equal(f.posts.length,0,'wrong loss direction rejected');
    await target(page).fill('55');await starting(page).fill('0');await saveGoal(page);assert.equal(f.posts.length,0);
-   await starting(page).fill('70');await start(page).fill('2026-10-18');await saveGoal(page);assert.equal(f.posts.length,0);
-   await start(page).fill('2026-10-12');await saveGoal(page);await page.locator('[data-action="progress-edit-goal"]').waitFor();
+   await starting(page).fill('70');await customStart(page,'2026-10-18');await saveGoal(page);assert.equal(f.posts.length,0);
+   await customStart(page,'2026-10-12');await saveGoal(page);await page.locator('[data-action="progress-edit-goal"]').waitFor();
    assert.equal(f.posts.length,1);assert.equal(f.posts[0].body.measurementDate,'2026-10-12');clean(f);
   }finally{await page.close();}
  });
@@ -149,7 +151,7 @@ describe('member goals and progress browser',{concurrency:false},()=>{
    assert.equal(f.progress.goals.length,2);assert.equal(f.progress.currentGoal.periodId,original.periodId);assert.equal(f.progress.goals[0].targetWeightKg,65);
    await page.locator('[data-action="progress-pause-goal"]').click();await page.locator('[data-action="progress-resume-goal"]').waitFor();assert.equal(f.progress.currentGoal.status,'paused');
    await page.locator('[data-action="progress-resume-goal"]').click();await page.locator('[data-action="progress-pause-goal"]').waitFor();assert.equal(f.progress.currentGoal.status,'active');
-   await page.locator('[data-action="progress-new-goal"]').click();await setup(page,'maintain',{weight:'61'});await measured(page).fill('2026-10-16');await start(page).fill('2026-10-17');await saveGoal(page);await page.locator('[data-action="progress-edit-goal"]').waitFor();
+   await page.locator('[data-action="progress-new-goal"]').click();await setup(page,'maintain',{weight:'61'});await measured(page).fill('2026-10-16');await customStart(page,'2026-10-17');await saveGoal(page);await page.locator('[data-action="progress-edit-goal"]').waitFor();
    assert.notEqual(f.progress.currentGoal.periodId,original.periodId);assert.equal(f.progress.currentGoal.goalType,'maintain');assert.deepEqual(f.progress.measurements,measurements);clean(f);
   }finally{await page.close();}
  });
@@ -157,12 +159,11 @@ describe('member goals and progress browser',{concurrency:false},()=>{
  test('dated records add, explicitly correct an existing date and confirm deletion without mutating health details',async()=>{
   const f=fixture();goal(f);const page=await open(f);
   try {
-   await progress(page);assert.equal(await page.locator('#progress-weight-form [name="date"]').inputValue(),TODAY);
+   await progress(page);await record(page);assert.equal(await page.locator('#progress-weight-form [name="date"]').inputValue(),TODAY);
    await page.locator('#progress-weight-form [name="weightKg"]').fill('61.2');await page.locator('#progress-weight-form [type="submit"]').click();
-   await page.locator('[data-action="progress-edit-weight"]').waitFor();assert.equal(f.progress.measurements.length,1);
-   await page.locator('#progress-weight-form [name="weightKg"]').fill('62');await page.locator('#progress-weight-form [type="submit"]').click();
-   assert.equal(f.progress.measurements.length,1,'duplicate dates never silently replace');
-   await page.locator('[data-action="progress-replace-weight"]').click();await page.locator('#progress-weight-form [name="weightKg"]').fill('62');await page.locator('#progress-weight-form [type="submit"]').click();
+   await page.locator('[data-action="progress-edit-weight"]').waitFor();assert.equal(f.progress.measurements.length,1);await record(page);
+   await page.locator('#progress-weight-form [name="weightKg"]').fill('62');assert.equal(await page.locator('#progress-weight-form [type="submit"]').count(),0);assert.equal(await page.locator('#progress-weight-error:visible').count(),0);assert.equal(f.progress.measurements.length,1,'duplicate dates never silently replace');
+   await page.locator('[data-action="progress-replace-weight"]').click();assert.equal(await page.locator('#progress-weight-form [name="weightKg"]').inputValue(),'62');await page.locator('#progress-weight-form [type="submit"]').click();
    await page.waitForFunction(()=>document.querySelector('#member-progress').innerText.includes('62'));assert.equal(f.progress.measurements.length,1);assert.equal(f.progress.measurements[0].weightKg,62);
    await page.locator('[data-action="progress-delete-weight"]').click();assert.match(await page.locator('#progress-delete-confirm').innerText(),/progress|chart|measurement/i);assert.equal(f.progress.measurements.length,1);
    await page.locator('[data-action="progress-confirm-delete"]').click();await page.waitForFunction(()=>document.querySelectorAll('[data-action="progress-edit-weight"]').length===0);assert.deepEqual(f.progress.measurements,[]);
@@ -177,7 +178,7 @@ describe('member goals and progress browser',{concurrency:false},()=>{
    assert.equal(await target(page).inputValue(),'65');assert.equal(f.progress.currentGoal,null);
    delete f.fail.save_goal;await saveGoal(page);await page.locator('[data-action="progress-edit-goal"]').waitFor();
    assert.equal(f.posts[0].body.requestId,f.posts[1].body.requestId,'an unchanged goal retry keeps its idempotent request identity');
-   const confirmed=structuredClone(f.progress.measurements);f.fail.add_weight='Measurement could not be saved.';await page.locator('#progress-weight-form [name="weightKg"]').fill('61.3');await page.locator('#progress-weight-form [type="submit"]').click();
+   await record(page);const confirmed=structuredClone(f.progress.measurements);f.fail.add_weight='Measurement could not be saved.';await page.locator('#progress-weight-form [name="weightKg"]').fill('61.3');await page.locator('#progress-weight-form [type="submit"]').click();
    await page.locator('#progress-weight-error').waitFor();assert.equal(await page.locator('#progress-weight-form [name="weightKg"]').inputValue(),'61.3');assert.deepEqual(f.progress.measurements,confirmed);
    delete f.fail.add_weight;f.hold=new Promise(resolve=>{release=resolve;});
    const before=f.posts.length;await page.locator('#progress-weight-form').evaluate(form=>{form.requestSubmit();form.requestSubmit();});
@@ -190,7 +191,7 @@ describe('member goals and progress browser',{concurrency:false},()=>{
  test('future, empty and non-finite measurements are rejected before submission',async()=>{
   const f=fixture();goal(f);const page=await open(f);
   try {
-   await progress(page);
+   await progress(page);await record(page);
    for(const value of ['', '0','501','61.23']) {await page.locator('#progress-weight-form [name="weightKg"]').fill(value);await page.locator('#progress-weight-form [type="submit"]').click();assert.equal(f.posts.length,0);}
    await page.locator('#progress-weight-form [name="weightKg"]').fill('61');await page.locator('#progress-weight-form [name="date"]').fill('2026-10-18');await page.locator('#progress-weight-form [type="submit"]').click();assert.equal(f.posts.length,0);clean(f);
   }finally{await page.close();}
@@ -202,7 +203,7 @@ describe('member goals and progress browser',{concurrency:false},()=>{
    try {
     await progress(page);assert.equal(await page.locator('#progress-chart').count(),1);
     assert.equal(Number(await page.getByRole('progressbar').getAttribute('value')),percent);
-    assert.match(await page.locator('#progress-summary .progress-values > div').filter({has:page.locator('dt',{hasText:'Latest logged weight'})}).innerText(),new RegExp(`${latest}(?:\\.0)?\\s*kg`));
+    assert.match(await page.locator('#progress-summary .progress-values > div').filter({has:page.locator('dt',{hasText:'Latest weight'})}).innerText(),new RegExp(`${latest}(?:\\.0)?\\s*kg`));
     const chart=page.locator('#progress-chart');assert.match(await chart.getAttribute('aria-label')||await chart.textContent(),/weight|measurement/i);
     const points=await chart.locator('circle title').allTextContents();assert.equal(points.length,3);assert.match(points[0],/12 Oct 2026/);assert.match(points[1],/14 Oct 2026/);assert.match(points[2],/16 Oct 2026/);
     assert.doesNotMatch(await page.locator('#member-progress').innerText(),/medically cleared|improved health|attendance caused/i);clean(f);
@@ -248,9 +249,9 @@ describe('member goals and progress browser',{concurrency:false},()=>{
  test('a lost confirmation keeps unconfirmed results out until explicit saved-record refresh reconciles them',async()=>{
   const f=fixture();goal(f);weights(f);f.lostResponse='add_weight';const page=await open(f);
   try {
-   await progress(page);await page.locator('#progress-weight-form [name="weightKg"]').fill('62');await page.locator('#progress-weight-form [type="submit"]').click();
+   await progress(page);await record(page);await page.locator('#progress-weight-form [name="weightKg"]').fill('62');await page.locator('#progress-weight-form [type="submit"]').click();
    await page.locator('#progress-weight-error').waitFor();assert.equal(f.progress.measurements.length,3,'isolated server accepted the record before the lost response');
-   assert.match(await page.locator('#progress-summary .progress-values > div').filter({has:page.locator('dt',{hasText:'Latest logged weight'})}).innerText(),/61\.0 kg/);
+   assert.match(await page.locator('#progress-summary .progress-values > div').filter({has:page.locator('dt',{hasText:'Latest weight'})}).innerText(),/61\.0 kg/);
    assert.equal(await page.locator('#progress-weight-form [name="weightKg"]').inputValue(),'62');
    await page.getByRole('button',{name:'Refresh saved records',exact:true}).click();
    await page.waitForFunction(()=>document.querySelector('#progress-summary .progress-values')?.innerText.includes('62.0 kg'));
@@ -275,11 +276,77 @@ describe('member goals and progress browser',{concurrency:false},()=>{
    const f=fixture(role),page=await open(f);
    try {
     assert.equal(await page.getByRole('link',{name:'Attendance',exact:true}).count(),1);assert.equal(await page.getByRole('link',{name:'Attendance & Progress',exact:true}).count(),0);
-    assert.equal(await page.getByRole('tab',{name:'My progress',exact:true}).count(),0);
+    assert.equal(await page.getByRole('tab',{name:'My progress',exact:true}).count(),0);assert.equal(await page.getByRole('link',{name:'My goal',exact:true}).count(),0);assert.equal(await page.locator('#member-progress').count(),0);
     if(role==='admin') {await page.locator('[data-action="mode"][data-mode="member"]').click();await page.evaluate(()=>navigate('attendance'));assert.equal(await page.locator('#member-progress').count(),0);}
     assert.equal(f.reads.some(path=>path.startsWith('/api/member-progress')),false);assert.equal(f.reads.some(path=>path.startsWith('/api/member-health')),false);assert.deepEqual(f.posts,[]);clean(f);
    }finally{await page.close();}
   }
+ });
+
+
+ test('canonical pages and old progress bookmarks support direct load, reload and distinct active navigation',async()=>{
+  for(const section of ['goal','progress','my-goal','attendance?tab=progress','attendance/progress']) {
+   const f=fixture();goal(f);weights(f);const page=await open(f,{section});
+   try {
+    assert.equal(new URL(page.url()).hash,'#/member/goal');await progress(page);assert.equal(await page.locator('a.nav-link[aria-current="page"]').innerText(),'My goal');
+    assert.equal(await page.locator('#progress-attendance-summary,#member-attendance').count(),0);
+    assert.equal(f.reads.some(path=>path.startsWith('/api/member-attendance')),false,'goal does not request duplicated attendance');
+    await page.reload();await page.waitForFunction(()=>window.progressBrowserReady);await progress(page);assert.equal(new URL(page.url()).hash,'#/member/goal');assert.equal(await page.locator('#member-progress').count(),1);assert.deepEqual(f.posts,[]);clean(f);
+   }finally{await page.close();}
+  }
+ });
+
+ test('sidebar navigation and browser Back/Forward preserve unsaved goal and weight drafts until explicit Cancel',async()=>{
+  const f=fixture();goal(f);weights(f);const page=await open(f);
+  try {
+   await progress(page);await page.locator('[data-action="progress-edit-goal"]').click();await target(page).fill('68');
+   await page.getByRole('link',{name:'Attendance',exact:true}).click();await page.locator('#attendance-tracker-summary').waitFor();assert.equal(await page.locator('#progress-goal-form,#progress-weight-form').count(),0);
+   await page.goBack();await page.locator('#progress-goal-form').waitFor();assert.equal(await target(page).inputValue(),'68');
+   await page.goForward();await page.locator('#attendance-tracker-summary').waitFor();await page.getByRole('link',{name:'My goal',exact:true}).click();await page.locator('#progress-goal-form').waitFor();assert.equal(await target(page).inputValue(),'68');
+   await page.locator('[data-action="progress-cancel-goal"]').click();await page.locator('[data-action="progress-edit-goal"]').click();assert.equal(await target(page).inputValue(),'65');await page.locator('[data-action="progress-cancel-goal"]').click();
+   await record(page);await page.locator('#progress-weight-form [name="weightKg"]').fill('63.4');await page.getByRole('link',{name:'Attendance',exact:true}).click();await page.locator('#attendance-tracker-summary').waitFor();await page.getByRole('link',{name:'My goal',exact:true}).click();await page.locator('#progress-weight-form').waitFor();assert.equal(await page.locator('#progress-weight-form [name="weightKg"]').inputValue(),'63.4');
+   await page.locator('[data-action="progress-cancel-weight"]').click();await record(page);assert.equal(await page.locator('#progress-weight-form [name="weightKg"]').inputValue(),'');assert.deepEqual(f.posts,[]);clean(f);
+  }finally{await page.close();}
+ });
+
+
+ test('switching editors shows one form and preserves each unsaved draft until its own Cancel',async()=>{
+  const f=fixture();goal(f);weights(f);const page=await open(f);
+  try {
+   await progress(page);await page.locator('[data-action="progress-edit-goal"]').click();await target(page).fill('68');await record(page);assert.equal(await page.locator('#member-progress form').count(),1);assert.equal(await page.locator('#progress-goal-form').count(),0);await page.locator('#progress-weight-form [name="weightKg"]').fill('63.1');
+   await page.locator('[data-action="progress-edit-goal"]').click();assert.equal(await page.locator('#member-progress form').count(),1);assert.equal(await target(page).inputValue(),'68');assert.equal(await page.locator('#progress-weight-form').count(),0);
+   await page.locator('[data-action="progress-cancel-goal"]').click();await record(page);assert.equal(await page.locator('#progress-weight-form [name="weightKg"]').inputValue(),'63.1');await page.locator('[data-action="progress-cancel-weight"]').click();assert.equal(await page.locator('#member-progress form').count(),0);assert.deepEqual(f.posts,[]);clean(f);
+  }finally{await page.close();}
+ });
+
+ test('same-date discovery is a normal explicit edit with proposed value preserved and different dates still record',async()=>{
+  const f=fixture();goal(f);weights(f,[['2026-10-12',60],[TODAY,61]]);const page=await open(f);
+  try {
+   await progress(page);await record(page);assert.match(await page.locator('#progress-duplicate').innerText(),/61\.0 kg/);assert.equal(await page.locator('#progress-weight-form [type="submit"]').count(),0);assert.equal(await page.locator('#progress-weight-error:visible').count(),0);
+   await page.locator('#progress-weight-form [name="weightKg"]').fill('62.5');await page.locator('[data-action="progress-replace-weight"]').click();assert.equal(await page.locator('#progress-weight-form [name="weightKg"]').inputValue(),'62.5');assert.equal(f.posts.length,0);
+   await page.locator('#progress-weight-form [type="submit"]').click();await page.waitForFunction(()=>!document.querySelector('#progress-weight-form'));assert.equal(f.posts[0].body.action,'update_weight');assert.equal(f.progress.measurements.find(entry=>entry.date===TODAY).weightKg,62.5);
+   await record(page);await page.locator('#progress-weight-form [name="date"]').fill('2026-10-16');assert.equal(await page.locator('#progress-duplicate').count(),0);assert.equal(await page.locator('#progress-weight-form [type="submit"]').count(),1);await page.locator('#progress-weight-form [name="weightKg"]').fill('61.2');await page.locator('#progress-weight-form [type="submit"]').click();await page.waitForFunction(()=>!document.querySelector('#progress-weight-form'));assert.equal(f.posts[1].body.action,'add_weight');assert.equal(f.progress.measurements.length,3);clean(f);
+  }finally{await page.close();}
+ });
+
+ test('goal setup defaults to today and can explicitly reuse a dated measurement with a separate goal start',async()=>{
+  const f=fixture();weights(f);const page=await open(f);
+  try {
+   await progress(page);await editNew(page);await goalType(page).selectOption('gain');assert.equal(await page.locator('#progress-different-start').isChecked(),false);assert.equal(await starting(page).inputValue(),'');assert.equal(await measured(page).inputValue(),'');
+   await page.locator('#progress-starting-source').selectOption('measurement:'+f.progress.measurements[0].id);assert.equal(await starting(page).inputValue(),'60');assert.equal(await measured(page).inputValue(),'2026-10-12');await target(page).fill('65');await saveGoal(page);await page.locator('[data-action="progress-edit-goal"]').waitFor();assert.equal(f.posts[0].body.startDate,TODAY);assert.equal(f.posts[0].body.measurementDate,'2026-10-12');assert.equal(f.progress.measurements.length,2);assert.equal(f.progress.healthWeight.weightKg,70);
+   await page.locator('[data-action="progress-edit-goal"]').click();assert.equal(await starting(page).inputValue(),'60');assert.equal(await measured(page).inputValue(),'2026-10-12');await customStart(page,'2026-10-14');await saveGoal(page);await page.locator('[data-action="progress-edit-goal"]').waitFor();assert.equal(f.posts[1].body.startDate,'2026-10-14');assert.equal(f.posts[1].body.measurementDate,'2026-10-12');assert.equal(f.progress.goals[0].startDate,TODAY);clean(f);
+  }finally{await page.close();}
+ });
+
+ test('phone sidebar links, active page, collapsed summary and one editor stay usable at 390 and 320 pixels',async()=>{
+  const f=fixture();goal(f);weights(f);const page=await open(f);
+  try {
+   await progress(page);assert.equal(await page.locator('#progress-goal-form,#progress-weight-form').count(),0);assert.equal(await page.locator('#progress-health-weight').count(),0);assert.equal(await page.getByRole('heading',{name:'Weight history',exact:true}).count(),1);assert.equal(await page.getByRole('button',{name:'Correct',exact:true}).count(),0);
+   for(const width of [390,320]) {
+    await page.setViewportSize({width,height:844});await page.getByRole('button',{name:'Open navigation',exact:true}).click();await mkdir('test-results/goal-usability',{recursive:true});await page.screenshot({path:`test-results/goal-usability/after-navigation-${width}.png`,animations:'disabled'});await page.getByRole('link',{name:'Attendance',exact:true}).click();await page.locator('#attendance-tracker-summary').waitFor();assert.equal(await page.locator('a.nav-link[aria-current="page"]').innerText(),'Attendance');assert.equal(await page.locator('#member-progress').count(),0);
+    await page.getByRole('button',{name:'Open navigation',exact:true}).click();await page.getByRole('link',{name:'My goal',exact:true}).click();await progress(page);assert.equal(await page.locator('a.nav-link[aria-current="page"]').innerText(),'My goal');assert.equal(await page.locator('#member-attendance').count(),0);await record(page);assert.equal(await page.locator('#member-progress form').count(),1);await page.locator('[data-action="progress-cancel-weight"]').click();await page.locator('[data-action="progress-edit-goal"]').click();assert.equal(await page.locator('#member-progress form').count(),1);await page.locator('[data-action="progress-cancel-goal"]').click();assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+   }clean(f);
+  }finally{await page.close();}
  });
 
  test('desktop and phone progress fit without duplicate forms or panels and logout stays usable',async()=>{
@@ -290,9 +357,9 @@ describe('member goals and progress browser',{concurrency:false},()=>{
     await page.setViewportSize({width,height:844});
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,`${width}px page`);
     assert.equal(await page.locator('#member-progress').evaluate(el=>el.scrollWidth<=el.clientWidth),true,`${width}px panel`);
-    assert.equal(await page.locator('#member-progress').count(),1);assert.equal(await page.locator('#progress-weight-form').count(),1);assert.equal(await page.locator('#member-progress form form').count(),0);
+    assert.equal(await page.locator('#member-progress').count(),1);assert.equal(await page.locator('#progress-weight-form').count(),0);assert.equal(await page.locator('#progress-goal-form').count(),0);assert.equal(await page.locator('#member-progress form form').count(),0);
     assert.equal(await page.locator('[aria-label="Log out"]').isVisible(),true);
-    await page.locator('#member-progress').screenshot({path:`test-results/member-progress-${width}.png`,animations:'disabled'});
+    await mkdir('test-results/goal-usability',{recursive:true});await page.evaluate(()=>{document.activeElement?.blur();scrollTo(0,0);});await page.screenshot({path:`test-results/goal-usability/after-page-${width}.png`,fullPage:true,animations:'disabled'});await page.locator('#member-progress').screenshot({path:`test-results/goal-usability/after-my-goal-${width}.png`,animations:'disabled'});
    }
    await page.locator('[aria-label="Log out"]').click();await page.getByRole('heading',{name:'Good to see you.',exact:true}).waitFor();clean(f);
   }finally{await page.close();}
