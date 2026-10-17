@@ -30,6 +30,7 @@
     "test:survey-flow": "node --env-file-if-exists=.env.local tests/survey.js",
     "test:next-cycle": "node --env-file-if-exists=.env.local tests/next-cycle.js",
     "test:plans": "node --env-file-if-exists=.env.local tests/plans.js",
+    "test:plans-concurrency": "node tests/plans-concurrency.js",
     "reset:test-data": "node --env-file-if-exists=.env.local scripts/reset-test-data.js"
   },
   "engines": {

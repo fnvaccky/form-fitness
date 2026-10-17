@@ -586,6 +586,7 @@ Test added:
 - `tests/plans.js` (`npm run test:plans`, real stack):
   - the API, an email after an edit, retirement, and a plan edit racing a new cycle in both orders;
   - the screens for administrators, staff and members on desktop and phone, including a rename that another plan follows.
+- `tests/plans-concurrency.js` (`npm run test:plans-concurrency`, two database sessions): concurrent plan changes can't create a loop or a line that names no plan, the waiting change is checked against the committed plans, workspaces stay independent, and purchased terms don't change.
 - `tests/unit.test.js` and `tests/attendance.test.js`: the plan form, coaching labels, the terms view, the plans that follow a rename, the email and the scan screen.
 - `tests/attendance.js`: `/checkin-status` also returns the plan name as bought.
 
@@ -603,6 +604,13 @@ Review round 1 (2026-10-17, before any push). Three findings, fixed locally in t
   - The migration also refuses to run if the catalog has a line that names no plan.
   - Tested: new purchases include the renamed plan's benefits, including one added in the same edit, and every cycle bought before keeps its terms exactly.
 - **Backfill wording.** Values that weren't stored with a cycle or registration are described as the catalog baseline captured during the migration. They are not presented as proof of what a member was shown when buying.
+
+Review round 2 (2026-10-17, before any push): two administrators changing one workspace's plans at the same moment.
+- **Reproduced with two local database sessions.** Each change checked its references against the plans as they were before the other committed:
+  - plan X including Y while Y included X left a loop;
+  - renaming Essential while another administrator created, or edited, a plan saying "Everything in Essential" left a line that named no plan.
+- **Fix:** `plan_admin` takes a lock for the caller's workspace, held until commit, before it reads or checks anything. A second change waits, then is checked against what the first committed. Workspaces don't wait on each other, and purchases don't take the lock.
+- **Tested:** `tests/plans-concurrency.js` covers both races and the reverse order (the edit commits first, and the rename waits, then renames that line too). It also shows another workspace never waits and every purchased snapshot stays unchanged. The suite fails against the round-1 `plan_admin`.
 
 ## BUG-018: The service key and the database owner can TRUNCATE the history tables   (status: noticed)
 Found: 2026-10-17 while closing FEATURE-008's TRUNCATE gap. Where: the database. Same result locally and live (read-only check).

@@ -11,6 +11,8 @@
 --    checked here from the session. ff_plans refuses every other insert or update (ff_private.command's old 'plans'
 --    action and the service key included), every delete and any TRUNCATE (which, with CASCADE, would also empty
 --    every cycle, invoice, payment and check-in). A plan's ID never changes; a plan is retired by making it unavailable.
+--    Changes to one workspace's plans run one at a time (a workspace lock taken before any check), so each is checked
+--    against the plans as the previous change committed them; workspaces don't wait on each other.
 -- 3. Purchased terms: each membership cycle, and each first registration, keeps what was bought (name, price,
 --    length, description, features, what each "Everything in <plan>" line meant, and coaching), taken from the plan
 --    row in the transaction that creates it. The terms never change afterwards. Existing rows are filled once below:
@@ -264,8 +266,11 @@ begin
  v.workspace:=a.workspace; v.id:=body->>'id'; v.name:=btrim(body->>'name');
  v.price_cents:=(body->>'priceCents')::numeric; v.days:=(body->>'days')::numeric; v.description:=btrim(body->>'description'); v.features:=features;
  v.available:=(body->>'available')::boolean; v.coaching:=body->>'coaching'; v.coach_sessions:=(body->>'coachSessions')::numeric; v.focus_tags:=ff_private.focus_tags(tags);
- -- One plan per ID at a time; names stay unique in the workspace, so an "Everything in <plan>" line names one plan.
- perform pg_advisory_xact_lock(hashtextextended('ff_plan:'||v.workspace||':'||v.id,0));
+ -- One change to a workspace's plans at a time, held until commit and taken before anything below reads the catalog: a
+ -- second administrator waits here, then checks names and "Everything in" references against what the first committed
+ -- (each statement below sees the latest commit), so two changes can't create a loop or a line that names no plan.
+ -- Each workspace has its own lock, so workspaces never wait on each other. Purchases don't take it.
+ perform pg_advisory_xact_lock(hashtextextended('ff_plans:'||v.workspace,0));
  if exists(select 1 from public.ff_plans where workspace=v.workspace and lower(name)=lower(v.name) and id<>v.id) then raise exception 'Another plan already uses this name.'; end if;
  -- Each "Everything in <plan>" line names another plan of this workspace, and that plan doesn't include this one.
  for line in select value from jsonb_array_elements_text(v.features) loop
