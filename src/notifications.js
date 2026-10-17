@@ -1,6 +1,7 @@
 import nodemailer from 'nodemailer';
 import { serviceClient, result } from './supabase.js';
 import { coachingLabel, termsLines } from './plans.js';
+import {notificationEmail} from './email-layout.js';
 // terms: the cycle's purchased terms (Task 12A), so an email sent after a plan edit still describes what was bought.
 export function paymentEmail(body, invoice, cycle, terms, origin) {
   const remaining=(invoice.amount_cents-invoice.paid_cents)/100;
@@ -14,6 +15,12 @@ export async function notificationBody(db, row, env) {
   const origin=env.APP_ORIGIN || (env.VERCEL_URL ? `https://${env.VERCEL_URL}` : '');
   if (!origin) throw Error('Notification origin is missing.');
   return paymentEmail(row.body,invoice,cycle,cycle.terms,new URL(origin).origin);
+}
+export async function notificationMessage(db,row,env) {
+  const text=await notificationBody(db,row,env);
+  const origin=env.APP_ORIGIN || (env.VERCEL_URL?`https://${env.VERCEL_URL}`:'');
+  const action=origin?{label:row.event_key?.startsWith('payment:')?'View payment details':'Open RepReady',url:new URL(origin).origin+(row.event_key?.startsWith('payment:')?'/#/member/payments':'/')} : undefined;
+  return notificationEmail({subject:row.subject,text,action});
 }
 // A stable Message-ID helps investigation; SMTP cannot guarantee exactly-once delivery.
 export async function flushEmails(env = process.env, transport) {
@@ -29,7 +36,7 @@ export async function flushEmails(env = process.env, transport) {
     const claim = result(await db.from('ff_notifications').update({status:'sending',claimed_at:new Date().toISOString()}).eq('id',row.id).eq('status','queued').select('id'));
     if (!claim.length) continue;
     try {
-      const receipt = await sender.sendMail({from:{name:'RepReady',address:env.GMAIL_ADDRESS},to:row.recipient,subject:row.subject,text:await notificationBody(db,row,env),messageId:`<${row.id}@form-fitness.local>`});
+      const receipt = await sender.sendMail({from:{name:'RepReady',address:env.GMAIL_ADDRESS},to:row.recipient,subject:row.subject,...await notificationMessage(db,row,env),messageId:`<${row.id}@form-fitness.local>`});
       const accepted = receipt.accepted?.includes(row.recipient);
       result(await db.from('ff_notifications').update({status:accepted?'sent':'failed',sent_at:accepted?new Date().toISOString():null,error:accepted?null:'SMTP rejected the recipient.'}).eq('id',row.id).eq('status','sending'));
       count++;

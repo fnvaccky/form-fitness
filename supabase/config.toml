@@ -414,9 +414,9 @@ enabled = true
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":80,\"commaStyle\":\"trailing\"}"
 
 [auth.email.template.invite]
-subject = "Welcome to RepReady - set up your account"
+subject = "RepReady - set up your password"
 content_path = "./supabase/templates/invite.html"
 
 [auth.email.template.recovery]
-subject = "RepReady - set up or recover your account"
+subject = "RepReady - choose your password"
 content_path = "./supabase/templates/recovery.html"

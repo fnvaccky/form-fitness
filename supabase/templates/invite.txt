@@ -1,0 +1,23 @@
+RepReady
+GYM MEMBERSHIP
+
+Set up your password
+
+{{ if .Data.name }}Hello {{ .Data.name }},{{ else }}Hello,{{ end }}
+
+Your RepReady account is ready. Set up your password to sign in.
+
+Login email: {{ .Email }}
+{{ if .Data.plan_name }}
+Your purchased membership
+Plan: {{ .Data.plan_name }}
+Membership dates: {{ .Data.start }} to {{ .Data.membership_end }}
+Your plan privileges:
+{{ range .Data.plan_features }}- {{ . }}
+{{ end }}{{ end }}
+{{ if .Data.plan_name }}Your membership and member pass are available only after confirmed full payment and while your membership dates and account are valid.{{ else }}After choosing your password, sign in with this email address. Your gym administrator manages your access.{{ end }}
+
+Set up your password:
+{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=invite
+
+Never share your setup link or password. If this link expires, request a new link from the RepReady sign-in page. Need help? Contact gym reception.
