@@ -45,6 +45,7 @@
     "test:member-cash": "node --test tests/member-cash-browser.test.js",
     "test:portal-views": "node --test tests/portal-view-browser.test.js tests/portal-authorization.test.js",
     "test:performance": "node --test tests/performance-browser.test.js tests/performance-payments-browser.test.js tests/performance-server.test.js",
+    "test:session-sync": "node --test tests/session-sync-browser.test.js",
     "measure:performance": "node scripts/performance-measure.mjs",
     "reset:test-data": "node --env-file-if-exists=.env.local scripts/reset-test-data.js"
   },

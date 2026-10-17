@@ -1,9 +1,10 @@
 'use strict';
 let paymentIntent='',currentUser=null,authReady=false,scanner=null,passTimer=null,checkinTimer=null,checkinWatch=null,lastScannedToken='',authTab='login',settingsTab='payments';
 // Every private response belongs to the session which started it, including error responses.
-let authEpoch=0,stateRevision=0,stateRefresh=null;
+let authEpoch=0,stateRevision=0,stateRefresh=null,authActionPending=null;
 const staleResponse=()=>Object.assign(Error('The account changed while this request was running.'),{code:'STALE_RESPONSE'});
 const isStaleResponse=error=>error?.code==='STALE_RESPONSE';
+const authenticatedOwner=user=>user?`${user.id}:${user.role}:${user.memberId||''}:${user.workspace||''}`:'';
 function beginAuthChange(reason,{renderNow=true}={}){
  authEpoch++;stateRevision++;stateRefresh=null;
  document.dispatchEvent(new CustomEvent('repready-auth-changing',{detail:{reason}}));
@@ -55,11 +56,14 @@ function refreshData(){
   // A mutation confirmed during this read invalidates its older snapshot. Coalesce readers,
   // then fetch once more instead of applying stale data or starting overlapping state requests.
   do{const revision=stateRevision;data=await api('/state');if(task.epoch!==authEpoch)throw staleResponse();if(revision===stateRevision)break;}while(true);
+  const changedOwner=authenticatedOwner(currentUser)!==authenticatedOwner(data.user);
+  if(changedOwner)beginAuthChange('state-account-change');
   currentUser=data.user;DEMO_DATE=data.date;state=data;
   if(data.plans)plans.splice(0,plans.length,...data.plans);
   selectedMember=currentUser.role==='member'?currentUser.memberId:state.members.some(m=>m.id===selectedMember)?selectedMember:state.members[0]?.id||'';
   if(!selectedMember&&mode==='member')mode='admin';
   preserveWorkspaceView(()=>render());
+  if(changedOwner){authCommitted('account');throw staleResponse();}
  })().finally(()=>{if(stateRefresh===task)stateRefresh=null;});
  stateRefresh=task;return task.promise;
 }
@@ -74,9 +78,14 @@ async function boot(){
  }catch(e){if(isStaleResponse(e))return;document.getElementById('app').innerHTML=`<div class="loading-screen"><span class="brandmark">R</span><h2>We couldn’t open the workspace.</h2><p>${esc(e.message)}</p>${btn('Try again','reload','primary')}</div>`;}
 }
 async function logoutAccount(){
- beginAuthChange('logout');
+ if(authActionPending)return;
+ const action={kind:'logout'};authActionPending=action;
+ const epoch=beginAuthChange('logout');
+ document.querySelectorAll('#login-form input,#login-form button').forEach(control=>control.disabled=true);
+ const button=document.querySelector('#login-form [type="submit"]');if(button)button.textContent='Signing out…';
  try{await api('/logout',{});authCommitted('logout');toast('You have been logged out.');}
  catch(error){if(isStaleResponse(error))return;authCommitted('logout-failed');openModal('Logout not confirmed','Your previous account is hidden on this device.',`<p>${esc(error.message)} Retry to finish signing out of the server session.</p>`,`${btn('Close','close')}${btn('Retry logout','logout','primary')}`);}
+ finally{if(authActionPending===action)authActionPending=null;if(epoch===authEpoch&&!currentUser)render();}
 }
 function authView(){document.title='RepReady · Sign in';return `<div class="auth-shell"><section class="auth-story"><a class="brand" href="/"><span class="brandmark">R</span><span class="brandword">RepReady<small>GYM MEMBERSHIP</small></span></a><div class="auth-story-copy"><div class="eyebrow">A LITTLE PROGRESS, EVERY DAY</div><h1>Your next chapter <br>starts here.</h1><p>Your membership, payments, and gym pass.<br>All in one place. Always moving forward.</p><div class="auth-orbit">${icon('leaf')}</div></div><small>Your gym. Your progress. · RepReady</small></section><main class="auth-panel"><div class="auth-form-wrap"><div class="eyebrow">WELCOME TO YOUR COMMUNITY</div><h2>Good to see you.</h2><p class="auth-sub">Members and administrators sign in with their own accounts.</p><form id="login-form"><div class="field"><label for="login-email">Email address</label><input id="login-email" type="email" autocomplete="username" required maxlength="100"></div><div class="field"><label for="login-password">Password</label><input id="login-password" type="password" autocomplete="current-password" required maxlength="128"></div><div class="form-error" id="login-error" role="alert"></div><button class="button primary auth-submit" type="submit">Log in ${icon('arrow')}</button></form><button class="text-button" data-action="forgot-password">Forgot your password?</button><div class="auth-divider"><span>NEW TO REPREADY?</span></div><p class="auth-help">Visit the gym to register and pay for your first membership. Your account setup link will arrive by email after payment. Existing members can sign in to renew or choose their next plan.</p><div class="auth-footer">${icon('lock')}Your account is private. Sign in to securely manage your membership.</div></div></main></div>`;}
 header=function(){let html=baseHeader().replaceAll('Private prototype','Private workspace').replaceAll('Member demo view','Member account').replaceAll('Preview member','Preview member');if(currentUser?.role==='staff')html=html.replace('class="avatar ">GA</span>','class="avatar ">GS</span>').replace('<strong>Gym administrator</strong>','<strong>Gym staff</strong>').replace('<small>Admin workspace</small>','<small>Staff workspace</small>').replace('>Admin view</button>','>Staff view</button>');return html;};
@@ -137,7 +146,7 @@ async function verifyScanned(token,typed=false){const data=await api('/scan',typ
 function settingsModal(tab=settingsTab){settingsTab=tab;const p=state.settings?.payments||{};let body=`<div class="tabs"><button class="tab ${tab==='payments'?'active':''}" data-action="settings-tab" data-tab="payments">Payment QR codes</button><button class="tab ${tab==='gmail'?'active':''}" data-action="settings-tab" data-tab="gmail">Gmail sender</button><button class="tab ${tab==='mail-log'?'active':''}" data-action="settings-tab" data-tab="mail-log">Notifications</button></div>`,foot=btn('Close','close');if(tab==='payments'){body+=`<form id="payment-settings-form"><div class="settings-qr-grid">${[['gcash','GCash'],['bank','Bank transfer']].map(([k,label])=>`<div class="settings-qr-card"><h3>${label}</h3>${p[k]?.image?`<img src="${esc(p[k].image)}" alt="Saved ${label} QR">`:'<div class="qr-placeholder">No recipient QR uploaded</div>'}<div class="field"><label for="${k}-image">${p[k]?'Replace':'Upload'} actual payment QR</label><input id="${k}-image" type="file" accept="image/png,image/jpeg,image/webp"><small>PNG, JPEG, or WebP · up to 650 KB</small></div>${field('Recipient account name',k+'-name',p[k]?.name||'','text','maxlength="100"')}${field(k==='bank'?'Bank name / payment instructions':'GCash number / payment instructions',k+'-detail',p[k]?.detail||'','text','maxlength="120"')}</div>`).join('')}</div><div class="notice">Upload the QR generated by your own GCash or bank app. Confirm the recipient name matches before saving. The gym verifies submitted payments manually.</div><div class="form-error" id="form-error" role="alert"></div></form>`;foot+='<div class="right"><button class="button primary" type="submit" form="payment-settings-form">Save payment QR codes</button></div>';}else{body+=`<p class="auth-help">“Sent” means Gmail accepted the message. It does not guarantee inbox placement. For an unconfirmed delivery, check Gmail Sent before retrying.</p><div class="table-scroll"><table class="data-table"><thead><tr><th>Notification</th><th>Status</th><th>Action</th></tr></thead><tbody>${state.outbox?.length?state.outbox.map(m=>`<tr><td><strong>${esc(m.subject)}</strong><br><small>${esc(m.recipient)}</small>${m.error?`<p style="white-space:normal;font-size:10px;margin-top:6px">${esc(m.error)}</p>`:''}</td><td>${badge(m.status==='needs_review'?'Needs review':m.status[0].toUpperCase()+m.status.slice(1))}</td><td>${m.status==='needs_review'?btn('Review retry','retry-email','small',`data-id="${m.id}"`):'—'}</td></tr>`).join(''):'<tr><td colspan="3">No notifications yet.</td></tr>'}</tbody></table></div>`;foot+=`<div class="right">${btn('Refresh','refresh-email','')}${btn('Send queued','send-queued','primary')}</div>`;}openModal('Workspace settings','Your payment destinations and notification sender.',body,foot,true);}
 guide=function(){openModal('Your connected workspace','A complete membership journey.',`<div class="guide-step"><i>1</i><div><strong>Set up payments and Gmail</strong><p>Upload the actual GCash and bank QR images in Settings. Queued notifications are delivered once the Gmail sender is set up on the server.</p></div></div><div class="guide-step"><i>2</i><div><strong>Register with complete contact details</strong><p>Staff record the member name, email, Philippine mobile number and selected plan. A password setup link is emailed after the first full payment.</p></div></div><div class="guide-step"><i>3</i><div><strong>Confirm funds received</strong><p>Choose cash at the desk or secure e-wallet/card checkout. Online payments are verified automatically; staff confirm cash received. Membership activates only after full payment and a valid start date.</p></div></div><div class="guide-step"><i>4</i><div><strong>Verify a live member pass</strong><p>Active members display a QR valid for 90 seconds. Staff scan it, match the member’s photo or photo ID, and confirm check-in.</p></div></div><div class="notice">Data is persistent. There is no demo reset. The site remains private; member accounts do not grant access through the separate site privacy gate.</div>`,btn('Got it','close','primary'));};
 async function runForm(form,operation){
- if(form.dataset.submitting==='true'||form.dataset.redirecting==='true')return;
+ if(form.dataset.submitting==='true'||form.dataset.redirecting==='true'||(form.id==='login-form'&&authActionPending))return;
  const epoch=authEpoch,button=document.querySelector(`button[form="${form.id}"]`)||form.querySelector('[type="submit"]'),label=button?.innerHTML;
  form.dataset.submitting='true';form.setAttribute('aria-busy','true');
  if(button){button.disabled=true;button.textContent=form.id==='login-form'?'Signing in…':'Saving…';}
@@ -145,7 +154,7 @@ async function runForm(form,operation){
  finally{delete form.dataset.submitting;form.removeAttribute('aria-busy');if(button?.isConnected&&form.dataset.redirecting!=='true'){button.disabled=false;button.innerHTML=label;}}
 }
 document.addEventListener('submit',event=>{const form=event.target;const handlers={
- 'login-form':async()=>{const credentials={email:document.getElementById('login-email').value,password:document.getElementById('login-password').value};beginAuthChange('login',{renderNow:false});try{const session=await api('/login',credentials);currentUser=session.user;mode=can('roster')?'admin':'member';section='overview';authCommitted('login');await refreshData();if(/^#\/(member|admin)(?:\/|$)/.test(location.hash))route();}catch(error){if(!isStaleResponse(error))authCommitted('login-failed');throw error;}},
+ 'login-form':async()=>{if(authActionPending)throw Error('Please wait for the current sign-in or sign-out to finish.');const action={kind:'login'};authActionPending=action;const credentials={email:document.getElementById('login-email').value,password:document.getElementById('login-password').value};beginAuthChange('login',{renderNow:false});try{const session=await api('/login',credentials);currentUser=session.user;mode=can('roster')?'admin':'member';section='overview';authCommitted('login');await refreshData();if(/^#\/(member|admin)(?:\/|$)/.test(location.hash))route();}catch(error){if(!isStaleResponse(error)){if(currentUser)beginAuthChange('login-error',{renderNow:false});authCommitted('login-failed');}throw error;}finally{if(authActionPending===action)authActionPending=null;}},
  'register-form':submitRegistration,
  'payment-form':submitPayment,
  'checkout-form':async()=>{await api('/payment-submissions',{invoiceId:paymentInvoice,method:document.getElementById('checkout-method').value,amount:Number(document.getElementById('checkout-amount').value),reference:document.getElementById('checkout-reference').value,receipt:await imageFile(document.getElementById('payment-proof'))});await refreshData();closeModal();navigate('payments');toast('Payment submitted. It remains pending until verified by the gym.');},
@@ -212,7 +221,7 @@ document.addEventListener('submit',event=>{
       if(link){try{await api('/auth/verify',{...link,newPassword});}catch(e){if(e.status===410||e.status===422)setupLink=null;if(e.status===410)return setupLinkExpired(e.message);throw e;}setupLink=null;}
       else{try{await api('/set-password',{newPassword});}catch(e){if(e.status===410)return setupLinkExpired(e.message);throw e;}}
       history.replaceState({},'',location.pathname);closeModal();await installPaymongo();
-boot();toast('Password saved.');},
+beginAuthChange('setup');await boot();authCommitted('setup');toast('Password saved.');},
     'renew-form':async()=>{await api('/renew',{memberId:document.getElementById('renew-member').value,plan:document.getElementById('renew-plan').value,start:document.getElementById('renew-start').value});await refreshData();closeModal();navigate('payments');toast('Invoice created. Payment is still required.');}
   };
   if(actions[form.id]){event.preventDefault();event.stopImmediatePropagation();runForm(form,actions[form.id]);}
