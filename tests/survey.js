@@ -126,7 +126,7 @@ try{
  const paidApi=client(app.origin);await paidApi.post('/login',{email:paid.email,password:paid.password});
  assert.equal((await paidApi.get('/checkin-status')).checkedIn,true,'the check-in status works');
  await paidPage.getByRole('button',{name:'Close',exact:true}).click();
- await paidPage.locator('.my-visits').filter({hasText:'This month: 1 visit'}).waitFor();
+ await paidPage.locator('.member-attendance-link').filter({hasText:'This month: 1 visit'}).waitFor();
  await paidPage.getByRole('link',{name:'My membership',exact:true}).click();
  await paidPage.locator('.survey-card').filter({hasText:card}).waitFor();
  assert.equal(await paidPage.locator('.survey-card + .member-hero').count(),1,'the card is at the top of My membership');

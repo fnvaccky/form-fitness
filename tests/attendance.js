@@ -140,7 +140,7 @@ try{
  const visitsCard=desk.locator('.stats-grid.with-visits .stat').filter({hasText:'Visits today'});
  await visitsCard.waitFor();assert.match(await visitsCard.innerText(),new RegExp(`\\b${todayCount}\\b`));
  await shot(desk,'attendance-dashboard',false);
- await desk.evaluate(()=>navigate('members'));await desk.locator('[data-action="member-tab"][data-tab="attendance"]').click();
+ await desk.evaluate(()=>navigate('attendance'));
  await desk.locator('.attendance-panel .stats-grid.three').waitFor();
  const shownTotals=await desk.locator('.attendance-panel .stat-value').allInnerTexts();
  assert.deepEqual(shownTotals,[String(report.totals.visits),String(report.totals.uniqueMembers),report.totals.dailyAverage.toFixed(1)]);
@@ -160,26 +160,26 @@ try{
  assert((await desk.locator('.attendance-panel tbody tr td:nth-child(4)').allInnerTexts()).every(t=>t==='Momentum'));
  await desk.locator('#attendance-from').fill(day(1));await desk.locator('#attendance-to').fill(day(0));await desk.locator('#attendance-plan').selectOption('all');
  await desk.getByRole('button',{name:'Apply',exact:true}).click();await desk.waitForFunction(()=>document.querySelector('.attendance-panel .stat-foot')?.textContent.includes('2 days'));
- const phone=await signIn(staff,{width:390,height:844});await phone.evaluate(()=>navigate('members'));
- await phone.locator('[data-action="member-tab"][data-tab="attendance"]').click();await phone.locator('.attendance-panel .stats-grid.three').waitFor();
+ const phone=await signIn(staff,{width:390,height:844});await phone.evaluate(()=>navigate('attendance'));
+ await phone.locator('.attendance-panel .stats-grid.three').waitFor();
  assert(await phone.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),'no sideways page scroll on a phone');
  await shot(phone,'attendance-report-phone');
- // Administrators have five Members tabs: on a phone the tab bar scrolls sideways, the page never does, and the open tab is in view.
+ // Attendance has its own navigation; Members retains its four operational tabs.
  const adminPhone=await signIn(admin,{width:390,height:844});await adminPhone.evaluate(()=>navigate('members'));
- const tabs=adminPhone.locator('[aria-label="Membership sections"] .tab');assert.equal(await tabs.count(),5,'roster, plans, staff, unpaid accounts and attendance');
+ const tabs=adminPhone.locator('[aria-label="Membership sections"] .tab');assert.equal(await tabs.count(),4,'roster, plans, staff and unpaid accounts');
  const fits=()=>adminPhone.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1);
  const inView=()=>adminPhone.evaluate(()=>{const b=document.querySelector('[aria-label="Membership sections"]').getBoundingClientRect(),t=document.querySelector('[aria-label="Membership sections"] .tab.active').getBoundingClientRect();return t.left>=b.left-1&&t.right<=b.right+1;});
- for(const tab of ['roster','plans','staff','unpaid','attendance']){
+ for(const tab of ['roster','plans','staff','unpaid']){
   await adminPhone.locator(`[data-action="member-tab"][data-tab="${tab}"]`).click();
   await adminPhone.waitForFunction(id=>document.querySelector('[aria-label="Membership sections"] .tab.active')?.dataset.tab===id,tab);
   assert(await fits(),`no sideways page scroll on a phone with the ${tab} tab open`);assert(await inView(),`the ${tab} tab is in view once open`);
  }
- await adminPhone.locator('.attendance-panel .stats-grid.three').waitFor();
- assert(await adminPhone.evaluate(()=>{const bar=document.querySelector('[aria-label="Membership sections"]');return bar.scrollWidth>bar.clientWidth&&bar.scrollLeft>0;}),'the five tabs scroll inside their bar');
+ await adminPhone.evaluate(()=>navigate('attendance'));await adminPhone.locator('.attendance-panel .stats-grid.three').waitFor();
+ assert.equal(await adminPhone.locator('[data-tab="attendance"]').count(),0,'attendance is no longer a member-management tab');
  await shot(adminPhone,'attendance-admin-phone',false);
- pass('Browser: the Attendance tab (last 7 days by default, totals, newest-first table, plan filter, Apply), CSV export with its file name and formula guard, the dashboard\'s Visits today, and phone-sized layouts (an administrator\'s five tabs scroll in their bar)');
+ pass('Browser: dedicated Attendance (last 7 days by default, totals, newest-first table, plan filter, Apply), CSV export with its file name and formula guard, dashboard visits and phone layouts');
 
- const me=await signIn(history);
+ const me=await signIn(history);await me.evaluate(()=>navigate('attendance'));
  const panel=me.locator('.my-visits');await panel.waitFor();
  assert.match(await panel.innerText(),new RegExp(`This month: ${memberState.visits.thisMonth} visits?`));
  assert.match(await panel.innerText(),new RegExp(`Last visit: [^\\n]*${memberState.visits.last.time}`),'the last visit, with its time');
@@ -188,7 +188,7 @@ try{
  await shot(me,'attendance-my-visits');
  assert.equal(await me.locator('[data-tab="attendance"]').count(),0);
  assert.deepEqual(errors,[],'no JavaScript errors');
- pass('Browser: My visits shows this month\'s count, the last visit and the member\'s last 30 visits; members get no Attendance tab');
+ pass('Browser: My visits shows this month\'s count, the last visit and the member\'s last 30 visits; members get their own Attendance navigation');
  console.log(`PASS: ${passed.length} attendance checks`);
 }finally{
  if(browser)await browser.close();prod?.server.close();demo?.server.close();

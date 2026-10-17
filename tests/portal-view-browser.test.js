@@ -119,7 +119,7 @@ describe('administrator-only portal view switching', {concurrency:false}, () => 
       await page.evaluate(()=>navigate('members'));
       await noPreviewControls(page);
       assert.equal(await page.locator('[data-action="register"]').first().isVisible(),true);
-      await page.locator('[data-action="member-tab"][data-tab="attendance"]').click();
+      await page.getByRole('link',{name:'Attendance',exact:true}).click();
       await page.locator('.attendance-panel td').filter({hasText:'Existing Member'}).waitFor();
       assert.ok(f.reads.includes('/api/reports/attendance'));
       await noPreviewControls(page);

@@ -19,6 +19,9 @@
 .attendance-body{padding:0 23px 21px}.attendance-body>:last-child{margin-bottom:0}
 .attendance-filters{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px;margin:4px 0 20px}
 .attendance-filters .field{min-width:150px;margin:0}
+.attendance-page .page-heading{min-width:0}.attendance-search{max-width:440px}.attendance-panel .data-table td small{display:block;overflow-wrap:anywhere;margin-top:4px}
+.member-attendance-link{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:20px 24px;margin-top:22px}.member-attendance-link h2{font-size:17px;font-weight:600;margin:0 0 7px}.member-attendance-link p{font-size:13px;line-height:1.7;color:var(--muted);margin:0}.member-attendance-link .button{flex-shrink:0}
+@media(max-width:680px){.attendance-filters .field{min-width:0;flex:1 1 100%;width:100%}.attendance-filters .field input,.attendance-filters .field select{width:100%}.attendance-search{width:100%;min-width:0}.attendance-search input{min-width:0}.member-attendance-link{align-items:stretch;flex-direction:column;padding:18px}.member-attendance-link .button{align-self:flex-start}}
 .my-visits{margin-top:22px}
 /* 13A: the member's check-in confirmation, shown in place of the QR. */
 .checked-in{text-align:center}.checked-in-mark{display:inline-grid;place-items:center;width:60px;height:60px;border-radius:50%;background:#e4efe3;color:var(--green);font-size:30px;font-weight:700;line-height:1;margin-bottom:12px}
