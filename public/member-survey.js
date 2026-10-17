@@ -26,10 +26,13 @@ const surveyCard = () => '<section class="panel survey-card" aria-label="Fitness
 const withSurveyCard = (html, markers) => { const marker = markers.find(m => html.includes(m)); return marker ? html.replace(marker, surveyCard() + marker) : surveyCard() + html; };
 const ownMemberWithoutSurvey = () => { const member = currentUser?.role === 'member' ? memberById(currentUser.memberId) : null; return member && !member.survey ? member : null; };
 
-// Task 12 puts its plan recommendation here: the plans that suit these answers, best first. None yet.
+// Task 12B: the plan recommendation for these answers and plans (rules in public/plan-recommender.js): the suggested
+// plan, the ranked rest, the reasons and the points behind them. null until the recommender has loaded.
 function recommendPlans(survey, plans) {
-  return [];
+  return window.planRecommender ? window.planRecommender.recommendPlans(survey, plans) : null;
 }
+// A member's answers for it: the survey, plus the main goal, which lives on the profile rather than in the survey.
+const recommendationAnswers = member => member ? {...(member.survey || {}), goal: member.goal} : null;
 
 function surveySummary(member) {
   const survey = member.survey;
@@ -122,8 +125,8 @@ function deskSurveyAnswers() {
     const html = surveyBaseOverview(), member = memberById(selectedMember);
     if (ownMemberWithoutSurvey()) return withSurveyCard(html, ['<div class="member-pass-bar">','<section class="member-hero">']);
     if (!surveyThanks || currentUser?.role !== 'member' || !member || member.start) return html;
-    const recommended = recommendPlans(member.survey, plans);
-    const note = `<div class="notice survey-thanks" role="status" tabindex="-1"><strong>Thanks! Choose your plan next.</strong>${recommended.length?` Suggested for you: ${recommended.map(p=>esc(p.name)).join(', ')}.`:''}</div>`;
+    const suggestion = recommendPlans(recommendationAnswers(member), plans), recommended = plans.find(p => p.id === suggestion?.recommended);
+    const note = `<div class="notice survey-thanks" role="status" tabindex="-1"><strong>Thanks! Choose your plan next.</strong>${recommended?` We recommend ${esc(recommended.name)} for you; see why below. Any plan can be chosen.`:''}</div>`;
     const at = html.indexOf('<div class="notice">');
     return at < 0 ? note + html : html.slice(0, at) + note + html.slice(at);
   };

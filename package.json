@@ -9,7 +9,7 @@
     "dev": "node --watch --env-file-if-exists=.env.local src/dev.js",
     "check": "node scripts/check.js",
     "build": "node build.cjs",
-    "test": "node --test tests/unit.test.js tests/paymongo-unit.test.js tests/reset-test-data.test.js tests/attendance.test.js",
+    "test": "node --test tests/unit.test.js tests/paymongo-unit.test.js tests/reset-test-data.test.js tests/attendance.test.js tests/recommendations.test.js",
     "test:integration": "node --env-file-if-exists=.env.local tests/integration.js",
     "test:browser": "node --env-file-if-exists=.env.local tests/browser.js",
     "seed:demo": "node --env-file-if-exists=.env.local scripts/seed-demo.js",
@@ -31,6 +31,7 @@
     "test:next-cycle": "node --env-file-if-exists=.env.local tests/next-cycle.js",
     "test:plans": "node --env-file-if-exists=.env.local tests/plans.js",
     "test:plans-concurrency": "node tests/plans-concurrency.js",
+    "test:recommendations": "node --env-file-if-exists=.env.local tests/recommendations.js",
     "reset:test-data": "node --env-file-if-exists=.env.local scripts/reset-test-data.js"
   },
   "engines": {

@@ -48,3 +48,12 @@
 .plan-focus-choices{display:flex;flex-wrap:wrap;gap:4px 18px}.plan-focus-choices .checkline{margin-top:0}
 .plan-form-help{margin:6px 0 0;font-size:10px;line-height:1.6;color:var(--muted)}
 @media(max-width:680px){.plan-admin .panel-header{flex-wrap:wrap}}
+/* Task 12B: the plan recommendation: a badge on the suggested card, and the reasons above the cards or under a plan picker. */
+.plan-kicker .tag.recommended{background:#fbeed7;color:#8a5a12}.plan-card.recommended-plan{border-color:#e2c48a;box-shadow:inset 0 0 0 1px #e2c48a}
+.plan-recommendation{margin:0 0 18px;padding:14px 18px;border:1px solid #ecd9b2;border-radius:10px;background:#fdf8ee;color:var(--ink);font-size:12px;line-height:1.6}
+.plan-recommendation-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}.plan-recommendation-head strong{font-size:14px}.plan-recommendation-head span:last-child{color:var(--muted);font-size:11px}
+.plan-recommendation .tag.recommended{font-size:9px;letter-spacing:.4px;text-transform:uppercase;background:#fbeed7;color:#8a5a12;padding:4px 7px;border-radius:4px;font-weight:600}
+.plan-recommendation-reasons{margin:8px 0 6px;padding-left:18px}.plan-recommendation-reasons li{margin:2px 0}
+.plan-recommendation-note{margin:0;font-size:11px;color:var(--muted)}
+.plan-recommendation.incomplete{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;background:#f6f7f3;border-color:var(--line)}.plan-recommendation.incomplete p{margin:0}
+.recommendation-slot .plan-recommendation{margin:12px 0 0}.recommendation-hint{margin:8px 0 0;font-size:11px;color:var(--muted)}

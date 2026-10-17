@@ -22,6 +22,8 @@ function nextCycleInfo(member) {
     const html = nextCycleBaseMembership(), member = memberById(selectedMember), info = member && nextCycleInfo(member);
     const start = html.indexOf('<div class="plan-intro">'), end = html.indexOf('<div class="info-strip">', start);
     if (!info || start < 0 || end < 0) return html;
+    // The note goes above the cards, and above Task 12B's recommendation when there is one.
+    const above = html.slice(start, end).includes('<div class="plan-recommendation') ? '<div class="plan-recommendation' : '<section class="plans-grid"';
     // The current plan's card says so, in place of its marketing badge, in both states below.
     let cards = html.slice(start, end).replace(/<article class="plan-card([^"]*)">([\s\S]*?)<\/article>/g, (card, cls, inner) => {
       if (!inner.includes(`data-plan="${info.plan.id}"`)) return card;
@@ -34,11 +36,11 @@ function nextCycleInfo(member) {
       const pay = can('initiateOnlinePayment') ? btn('Pay now', 'pay', 'primary', `data-id="${esc(info.waiting.id)}"`, 'arrow') : '<span>Pay at the front desk.</span>';
       cards = cards.replace(/<button class="button[^"]*" data-action="select-plan"[^>]*>[\s\S]*?<\/button>/g, '');
       const waiting = `<div class="next-cycle-note waiting" role="status"><p>Your next cycle (${esc(plan.name)}, from ${date(info.waiting.start, true)}) is waiting for payment.</p>${pay}</div>`;
-      return html.slice(0, start) + cards.replace('<section class="plans-grid"', waiting + '<section class="plans-grid"') + html.slice(end);
+      return html.slice(0, start) + cards.replace(above, waiting + above) + html.slice(end);
     }
     // Renew the current plan, or switch for the next cycle.
     for (const p of plans) cards = cards.replace(`Select ${esc(p.name)}</button>`, `${esc(p.id === info.plan.id ? `Renew ${p.name}` : `Switch to ${p.name} next cycle`)}</button>`);
     const note = `<div class="next-cycle-note" role="note"><p>You’re on ${esc(info.plan.name)} until ${date(info.until)}. Choosing a plan below creates your next cycle, starting ${date(info.next, true)}; your current one isn’t affected.</p></div>`;
-    return html.slice(0, start) + cards.replace('<section class="plans-grid"', note + '<section class="plans-grid"') + html.slice(end);
+    return html.slice(0, start) + cards.replace(above, note + above) + html.slice(end);
   };
 }

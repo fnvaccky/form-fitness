@@ -636,3 +636,39 @@ Possible fix, for Clark to decide (it may belong with SEC-001): the same stateme
 Found: 2026-10-17 while building FEATURE-008. Where: Renewals & payments → Walk-in renewal; roles: staff, admin.
 What happens: `ff_private.walkin_renew` refuses a plan that is no longer available with "Plan price changed. Review the full cash amount." The form lists only available plans, so this shows only if a plan is retired while the form is open. Nothing is charged or created.
 Not changed in FEATURE-008, which would have meant replacing `walkin_renew` as well. A later migration can give it its own message ("This plan was retired. Choose another plan.").
+
+## FEATURE-009: Plan recommendations from the fitness survey, with a record of recommended against chosen   (status: Gate 1)
+Requested: 2026-10-17 by Clark (Task 12, Part B, and the 12B instruction file). Where: plan selection after the first-login survey; My membership; the Walk-in renewal plan picker; Add member, once the desk survey is complete. Roles: members see their own suggestion; staff and administrators see a member's at the desk.
+What changed:
+- **The rules:** transparent points, with no AI and no outside service. They live in `public/plan-recommender.js`, and the database has the same rules as `ff_private.score_plans`. Rule version `12B.1`.
+  - New to training, or getting back into it: +2 for group coaching, +3 for a personal coach.
+  - Trains regularly: +1 for no coach.
+  - Build strength: +2 for a strength focus, and +1 more with a personal coach.
+  - Manage weight: +2 for a cardio focus.
+  - Stay consistent: +2 for group coaching.
+  - +1 for each exercise preference the plan focuses on (each preference counts once).
+  - Usually free 1–2 days a week: +1 for the plan(s) at the lowest price. Free 5 or more days: +1 for a group classes focus.
+  - Improve fitness adds nothing.
+
+  The goal comes from the profile; experience, exercises and days come from the survey. Ranking: most points, then the lower price in centavos, then the plan ID. Retired plans are never suggested.
+- **What people see:** "Recommended for you" on the suggested plan's card, and above the cards the plan with its reasons in plain words. It shows in the four places above, on desktop and phone.
+  - **Incomplete survey:** no suggestion and nothing guessed. The member sees "Complete your fitness profile to see which plan suits you best." with the survey button; staff see that the survey isn't complete.
+  - **No points anywhere:** the lowest price, said honestly ("None of your answers points to one plan in particular, so we suggest the plan with the lowest price.").
+  - **No plan available:** no suggestion.
+  - **Free choice:** nothing is preselected, bought, invoiced or repriced, and every available plan stays selectable. The walk-in picker keeps the member's current plan, and Add member keeps "No plan yet".
+  - **Task 11 and UI-001 unchanged:** paid members keep their pass without a survey, and renewing and online checkout still ask for the survey first. While a next cycle waits for payment there are still no plan buttons; the waiting note sits above the suggestion.
+- **The record** (`ff_plan_choices`): one row per new membership cycle and per new first registration, written by a database trigger in the same transaction.
+  - Each row has the workspace, the member, the cycle or registration, the plan chosen, the plan recommended (empty without a complete survey), the rule version, who created it and when. It also keeps the whole scoring: the answers used, every plan's terms and points, and the reasons. A row therefore still explains itself after the survey or the catalog changes.
+  - The recommendation is computed from the stored survey and the catalog as it is, never taken from the browser.
+  - Retries, paying an existing invoice and retrying an online checkout create no cycle, so no record. A completed first registration isn't recorded twice.
+  - Staff and administrators of the workspace can read the records; members can't. Nobody can write or change them.
+  - Recording never blocks a purchase: a failure only logs a warning.
+  - **Foreign keys:** deleting a cycle, a registration or a member account deletes its records, so never-paid clean-up and the test-data reset work as before. Plans and the creator are plain references, like a payment's recorder.
+  - **No backfill:** cycles bought before the migration have no record.
+- **Migration** `20261017180000_plan_recommendations.sql`, additive: four internal functions, one table with row level security, three triggers. Nothing existing changes. `REPORT_TASK_12B_GATE1.md` has the SQL and the checks.
+
+Test added:
+- `tests/recommendations.test.js` (14 unit tests): each rule, combinations, the goal from the profile, ties and centavos, duplicate answers, no points, an incomplete survey, retired plans, no plans, and changes.
+- `tests/recommendations-database.sql`: the rules in the database and a record for every way a cycle or registration is made, each recorded once through retries. Also: no record from paying or checkout retries, records unchanged by later edits, and purchased terms intact. Plus who can read or write the records, clean-up and its foreign keys, and the grants.
+- `tests/recommendations.js` (`npm run test:recommendations`, real stack): the browser and database rules agree on 2,500 answer sets. It also covers the four places on desktop and phone, free choice recorded as chosen, UI-001's waiting state, Task 11's gates, and survey and catalog changes.
+- `tests/next-cycle.js`: the next-cycle note may sit above the suggestion.

@@ -75,7 +75,8 @@ try{
  for(const [label,viewport] of [['desktop',{width:1440,height:1000}],['phone',{width:390,height:844}]]){
   const page=await signIn(paid,viewport);
   assert.equal((await page.locator('.next-cycle-note').innerText()).trim(),note,`${label}: the note above the cards`);
-  assert(await page.locator('.next-cycle-note + .plans-grid').count(),`${label}: the note sits right above the cards`);
+  // Right above the cards, or above Task 12B's recommendation, which sits right above them.
+  assert(await page.locator('.next-cycle-note + .plans-grid, .next-cycle-note + .plan-recommendation + .plans-grid').count(),`${label}: the note sits right above the cards`);
   const current=page.locator('.plan-card.current-plan');
   assert.equal(await current.count(),1);
   assert.match(await current.innerText(),/Your current plan[\s\S]*Momentum/);
