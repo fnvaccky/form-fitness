@@ -637,7 +637,7 @@ Found: 2026-10-17 while building FEATURE-008. Where: Renewals & payments → Wal
 What happens: `ff_private.walkin_renew` refuses a plan that is no longer available with "Plan price changed. Review the full cash amount." The form lists only available plans, so this shows only if a plan is retired while the form is open. Nothing is charged or created.
 Not changed in FEATURE-008, which would have meant replacing `walkin_renew` as well. A later migration can give it its own message ("This plan was retired. Choose another plan.").
 
-## FEATURE-009: Plan recommendations from the fitness survey, with a record of recommended against chosen   (status: Gate 1)
+## FEATURE-009: Plan recommendations from the fitness survey, with a record of recommended against chosen   (status: released 2026-10-17; Clark live retest pending)
 Requested: 2026-10-17 by Clark (Task 12, Part B, and the 12B instruction file). Where: plan selection after the first-login survey; My membership; the Walk-in renewal plan picker; Add member, once the desk survey is complete. Roles: members see their own suggestion; staff and administrators see a member's at the desk.
 What changed:
 - **The rules:** transparent points, with no AI and no outside service. They live in `public/plan-recommender.js`, and the database has the same rules as `ff_private.score_plans`. Rule version `12B.1`.
@@ -672,3 +672,12 @@ Test added:
 - `tests/recommendations-database.sql`: the rules in the database and a record for every way a cycle or registration is made, each recorded once through retries. Also: no record from paying or checkout retries, records unchanged by later edits, and purchased terms intact. Plus who can read or write the records, clean-up and its foreign keys, and the grants.
 - `tests/recommendations.js` (`npm run test:recommendations`, real stack): the browser and database rules agree on 2,500 answer sets. It also covers the four places on desktop and phone, free choice recorded as chosen, UI-001's waiting state, Task 11's gates, and survey and catalog changes.
 - `tests/next-cycle.js`: the next-cycle note may sit above the suggestion.
+
+Released 2026-10-17 after Clark specifically approved Task 12B migration `20261017180000_plan_recommendations.sql` and release through `6e81d55`, preserving acceptance commit `16d82cf`.
+- Fresh read-only preflight matched Gate 1 exactly; the dry run listed only the approved migration. It is applied live, with 22 of 22 migrations matching.
+- Post-migration schema comparison has zero unexpected differences, including all four function fingerprints, recording-table RLS and explicit SELECT-only grants. The ten documented pre-existing grant differences are unchanged.
+- `main` and `merge/option-a` were fast-forwarded to `6e81d55`; reviewed heads were pushed without force or amendments. Production `dpl_EJfDRgaQURtRsQBXdEXgx3H2Qmne` is READY, and `repready-gym.vercel.app` points to it.
+- Fresh anonymous live smoke: 53/53 passed (the established 48 plus five Task 12B checks). The new scripts, survey/next-cycle scripts and connected CSS match the deployed commit; API permission gates remain enforced. No runtime errors were returned for the release window.
+- Existing data counts were unchanged across the migration. Plans, profiles, surveys, memberships, registrations, invoices and payments had identical fingerprints before and after release/smoke; no live fixture or payment was created. `ff_plan_choices` remains empty.
+- Claude's matched Gate 1 local evidence remains reused: 116/116 unit tests, all 9 database suites and all 20 app suites passing; no full local regression was rerun for this release.
+- Configuration, PayMongo test-only mode and disabled automatic cleanup were preserved. `REPORT_TASK_12B.md` has the release result and short live retest. Clark's live acceptance is pending; Task 12C stays on hold until that retest is complete.
