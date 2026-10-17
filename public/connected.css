@@ -26,6 +26,7 @@
 .member-qr .pass-code{display:grid;justify-items:center;gap:2px}.member-qr .pass-code span{font-size:10px;letter-spacing:.08em;text-transform:uppercase}
 .member-qr .pass-code strong{font:700 28px/1.15 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:.12em;color:var(--ink)}
 .checked-in h3{font-size:19px;letter-spacing:-.3px;margin:0 0 6px;color:var(--ink)}.checked-in p{font-size:13px;color:var(--muted);margin:0 0 16px}.checked-in .review-card{text-align:left;margin-top:14px}
+.member-payment-modal .modal-footer{flex-wrap:wrap}.member-payment-modal .modal-footer .button{white-space:normal}.member-payment-modal .review-card{overflow-wrap:anywhere}
 /* Administrators have five Members tabs: on phones the tab bar scrolls sideways instead of widening the page. */
 @media(max-width:680px){.attendance-body{padding:0 18px 18px}.tabs[aria-label="Membership sections"]{overflow-x:auto;scrollbar-width:none}.tabs[aria-label="Membership sections"]::-webkit-scrollbar{display:none}.tabs[aria-label="Membership sections"] .tab:focus-visible{outline-offset:-3px}}
 /* UI-001: the next-cycle note above the plan cards on My membership, and the current plan's card. */

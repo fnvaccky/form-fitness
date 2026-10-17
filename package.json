@@ -34,6 +34,7 @@
     "test:recommendations": "node --env-file-if-exists=.env.local tests/recommendations.js",
     "test:recommendations:member": "node --test tests/recommendations-member.test.js",
     "test:sample-training": "node --test tests/sample-week.test.js tests/health-inputs.test.js tests/sample-training-browser.test.js tests/member-health-browser.test.js",
+    "test:member-cash": "node --test tests/member-cash-browser.test.js",
     "reset:test-data": "node --env-file-if-exists=.env.local scripts/reset-test-data.js"
   },
   "engines": {

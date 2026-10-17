@@ -311,7 +311,7 @@ try{
  await memberPage.evaluate(async id=>{await refreshData();pay(id);},manualInvoice.invoiceId);
  assert.deepEqual(await memberPage.locator('#invoice-channel option').evaluateAll(options=>options.map(o=>o.value)),['gcash','paymaya','grab_pay','card']);
  assert.equal(await memberPage.locator('#invoice-channel option:not(:disabled)').count(),4,'Member owns the invoice and needs no staff/admin capability');
- await memberPage.getByRole('button',{name:'Cash / Manual payment',exact:true}).click();assert.equal(await memberPage.getByRole('button',{name:'Bank transfer',exact:true}).count(),1);
+ await memberPage.getByRole('button',{name:'Pay cash at the front desk',exact:true}).click();assert.equal(await memberPage.getByRole('heading',{name:'Pay cash at the front desk',exact:true}).count(),1);assert.equal(await memberPage.locator('#checkout-form,.payment-qr,[data-action="checkout-method"]').count(),0);
  await memberPage.keyboard.press('Escape');
  await memberPage.evaluate(()=>{state.paymongo.methods=['card'];pay(state.invoices.find(i=>balance(i)>0).id);});assert.equal(await memberPage.locator('#invoice-channel option').count(),1);assert.equal(await memberPage.locator('#invoice-channel').inputValue(),'card');
  await call('/login',other);
@@ -323,7 +323,7 @@ try{
  await returnPage.getByRole('button',{name:'Check payment status',exact:true}).click();await returnPage.getByRole('button',{name:'Check payment status',exact:true}).waitFor({state:'detached'});
  assert.equal(result(await db.from('ff_checkouts').select('status').eq('id',returnedCheckout.checkout.id).single()).status,'expired');
  assert.equal(result(await db.from('ff_payments').select('id').eq('invoice_id',manualInvoice.invoiceId)).length,0,'Verified expiry releases target without recording payment');
- console.log('PASS: member manual/method filtering UI, real browser return stays unpaid, and verified expiry records no credit');
+ console.log('PASS: member front-desk/method filtering UI, real browser return stays unpaid, and verified expiry records no credit');
  // The admin screen: Cancel checkout on open rows, behind a confirmation; staff never see it.
  const screen=await openCheckout('screen');
  const signIn=async(account)=>{const view=await (await browser.newContext()).newPage();await view.goto(origin);await view.getByLabel('Email address',{exact:true}).fill(account.email);await view.getByLabel('Password',{exact:true}).fill(account.password);await view.getByRole('button',{name:'Log in',exact:true}).click();await view.waitForFunction(()=>currentUser);await view.evaluate(()=>navigate('payments'));return view;};
