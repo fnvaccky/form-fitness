@@ -528,7 +528,7 @@ The demo browser test now accepts the waiting state, which its demo customer is 
 Released 2026-10-17 as its own release (no migration): `main` was fast-forwarded to `3ad98de`, and Production deployment `dpl_3eciB59pNYabFyDmywB7VjVa6daE` is READY. Smoke tests pass, 37 of 37, including the shipped `next-cycle.js` matching the commit.
 Accepted 2026-10-17: Clark confirmed in his own live retest that the deployed UI-001 update works. This records his user acceptance; it is not a new independent test run.
 
-## FEATURE-008: Plan management with coaching, and purchased terms that survive plan edits   (status: Gate 1)
+## FEATURE-008: Plan management with coaching, and purchased terms that survive plan edits   (status: released)
 Requested: 2026-10-17 by Clark (Task 12, Part A, and the 12A instruction file). Where: Members & plans → Membership plans; plan cards everywhere; the member's card, overview and My membership; invoices; payment emails; the pass, check-in and scan screens; the attendance report. Roles: administrators manage plans, staff see them read-only, members see coaching and what they bought.
 What changed:
 - **Plan management, administrators only:**
@@ -611,6 +611,16 @@ Review round 2 (2026-10-17, before any push): two administrators changing one wo
   - renaming Essential while another administrator created, or edited, a plan saying "Everything in Essential" left a line that named no plan.
 - **Fix:** `plan_admin` takes a lock for the caller's workspace, held until commit, before it reads or checks anything. A second change waits, then is checked against what the first committed. Workspaces don't wait on each other, and purchases don't take the lock.
 - **Tested:** `tests/plans-concurrency.js` covers both races and the reverse order (the edit commits first, and the rename waits, then renames that line too). It also shows another workspace never waits and every purchased snapshot stays unchanged. The suite fails against the round-1 `plan_admin`.
+
+Released 2026-10-17 after Clark's "go" for this migration and all three commits (`319f741`, `a8a0d66`, `d306f35`).
+- **Pre-flight:** matched the reviewed state, with 0 differences across 27 read-only checks.
+- **Push:** `supabase db push --linked` applied `20261017120000_plan_management.sql`, with the usual CLI cache warning. Afterwards 21 of 21 migrations matched.
+- **Post-push checks:** 0 schema differences from local. They covered 21 function fingerprints, grants, 4 triggers, 12 plan constraints, the index and the columns, and TRUNCATE on plans is held by `postgres` only. The one grant difference is the `service_role` grant on `ff_public_plans`, which predates 12A.
+- **Live data:** the six plans carry the agreed coaching and focus tags, with prices and lengths unchanged. Both production cycles hold the Gate 1 baseline terms. Members, payments and invoice totals are unchanged.
+- **Release:** `main` was fast-forwarded to `d306f35`, and Production deployment `dpl_GZATdvebYugaJjb65z8e6hAgMCva` is READY. The previous one, `dpl_3eciB59pNYabFyDmywB7VjVa6daE`, is the rollback.
+- **Smoke tests:** 48 of 48 pass.
+
+Task 12B waits for Clark's live retest.
 
 ## BUG-018: The service key and the database owner can TRUNCATE the history tables   (status: noticed)
 Found: 2026-10-17 while closing FEATURE-008's TRUNCATE gap. Where: the database. Same result locally and live (read-only check).
