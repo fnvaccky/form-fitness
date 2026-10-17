@@ -187,4 +187,5 @@ document.addEventListener('click',event=>{const el=event.target.closest('[data-a
 document.addEventListener('submit',event=>{if(event.target.id!=='registration-retry-form')return;event.preventDefault();event.stopImmediatePropagation();runForm(event.target,async()=>{const response=await api('/registration-fulfill',{id:document.getElementById('retry-registration-id').value,retryEmail:true,emailChecked:document.getElementById('registration-delivery-checked').checked});await refreshData();registrationOutcome(response);});},true);
 
 installPaymongo();
-boot();
+// Restore the session after every deferred script/module has installed its rendering wrappers.
+document.addEventListener('DOMContentLoaded',boot,{once:true});

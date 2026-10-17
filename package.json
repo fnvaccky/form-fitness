@@ -32,6 +32,7 @@
     "test:plans": "node --env-file-if-exists=.env.local tests/plans.js",
     "test:plans-concurrency": "node tests/plans-concurrency.js",
     "test:recommendations": "node --env-file-if-exists=.env.local tests/recommendations.js",
+    "test:recommendations:member": "node --test tests/recommendations-member.test.js",
     "reset:test-data": "node --env-file-if-exists=.env.local scripts/reset-test-data.js"
   },
   "engines": {
