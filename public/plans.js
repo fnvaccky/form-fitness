@@ -31,7 +31,7 @@ function planForm(id){
   +field('Price (PHP) *','plan-price',v.price,'number','required min="0.01" max="100000" step="0.01" inputmode="decimal"')
   +field('Cycle length (days) *','plan-days',v.days,'number','required min="1" max="366" step="1" inputmode="numeric"')
   +`<div class="field full"><label for="plan-description">Description</label><textarea id="plan-description" rows="2" maxlength="200">${esc(v.desc)}</textarea><small>Up to 200 characters, on one line.</small></div>`
-  +`<div class="field full"><label for="plan-features">Features</label><textarea id="plan-features" rows="5">${esc((v.features||[]).join('\n'))}</textarea><small>One per line: up to 10 lines of 80 characters. A line such as “Everything in Essential” includes that plan’s features as they are when a member buys.</small></div>`
+  +`<div class="field full"><label for="plan-features">Features</label><textarea id="plan-features" rows="5">${esc((v.features||[]).join('\n'))}</textarea><small>One per line: up to 10 lines of 80 characters. “Everything in” followed by another plan’s exact name includes that plan’s features as they are when a member buys, and follows that plan if it is renamed.</small></div>`
   +`<div class="field"><label for="plan-coaching">Coaching</label><select id="plan-coaching">${COACHING_CHOICES.map(([value,label])=>`<option value="${value}" ${v.coaching===value?'selected':''}>${label}</option>`).join('')}</select></div>`
   +field('Coach sessions per cycle','plan-sessions',v.coachSessions||0,'number','min="0" max="30" step="1" inputmode="numeric"','0 to 30. A plan with no coach has none.')
   +`<fieldset class="field full plan-focus-field"><legend>Focus</legend><div class="plan-focus-choices">${Object.entries(FOCUS_LABELS).map(([value,label])=>`<label class="checkline"><input type="checkbox" name="plan-focus" value="${value}" ${(v.focusTags||[]).includes(value)?'checked':''}>${label}</label>`).join('')}</div><small>Used to suggest plans from a member’s fitness survey. Members don’t see it.</small></fieldset>`
@@ -73,12 +73,15 @@ document.addEventListener('submit',event=>{
   const button=document.querySelector('button[form="plan-form"]'),label=button?.textContent;
   try{
    const body=planFormBody(form);if(button)button.textContent='Saving…';
-   const {plan}=await api('/plans',body);
-   // Show the plan as the server saved it at once; the full refresh follows.
-   const at=plans.findIndex(p=>p.id===plan.id);if(at>=0)plans[at]=plan;else plans.push(plan);
+   const {plan,alsoUpdated=[]}=await api('/plans',body);
+   // Show the plans as the server saved them at once (a rename also updates the "Everything in" line of the plans that
+   // include it); the full refresh follows.
+   for(const saved of [plan,...alsoUpdated]){const at=plans.findIndex(p=>p.id===saved.id);if(at>=0)plans[at]=saved;else plans.push(saved);}
    if(state.plans)state.plans=plans.slice();
    closeModal();render();
-   toast(body.action==='create'?`${plan.name} added${plan.available?'':', not yet offered'}.`:`${plan.name} saved. Existing memberships and invoices keep their terms.`);
+   const others=alsoUpdated.map(p=>p.name);
+   toast(body.action==='create'?`${plan.name} added${plan.available?'':', not yet offered'}.`
+    :`${plan.name} saved.${others.length?` ${others.join(', ')} now ${others.length===1?'says':'say'} “Everything in ${plan.name}”.`:''} Existing memberships and invoices keep their terms.`);
    refreshData().catch(()=>{});
   }catch(e){if(button?.isConnected)button.textContent=label;throw e;}
  });

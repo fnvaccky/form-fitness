@@ -20,6 +20,10 @@ create function pg_temp.as_user(k text) returns void language sql as $$
 create function pg_temp.plan(changes jsonb) returns jsonb language sql as $$
  select jsonb_build_object('id','zz-test','name','LOCAL TEST Plan','priceCents',120000,'days',28,'description','A plan made by the tests.',
   'features',jsonb_build_array('Gym floor','Everything in Essential'),'available',true,'coaching','group','coachSessions',2,'focusTags',jsonb_build_array('cardio','strength'))||changes $$;
+-- A complete body from a production plan as it is now, with some fields changed.
+create function pg_temp.body(plan_id text,changes jsonb default '{}') returns jsonb language sql as $$
+ select jsonb_build_object('id',id,'name',name,'priceCents',price_cents,'days',days,'description',description,'features',features,'available',available,
+  'coaching',coaching,'coachSessions',coach_sessions,'focusTags',to_jsonb(focus_tags))||changes from public.ff_plans where workspace='production' and id=plan_id $$;
 create function pg_temp.cycle(k text,plan text) returns public.ff_memberships language sql as $$
  select * from public.ff_memberships where member_id=pg_temp.id(k) and plan_id=plan order by start_date desc limit 1 $$;
 create function pg_temp.invoice(k text,plan text) returns public.ff_invoices language sql as $$
@@ -178,6 +182,7 @@ select public.ff_plan_admin('update',jsonb_build_object('id','plus','name','Mome
 select public.ff_plan_admin('update',jsonb_build_object('id','basic','name','Essential','priceCents',89900,'days',30,'description','A solid foundation for your fitness routine.',
  'features',jsonb_build_array('Unlimited gym access','All strength equipment','Locker room access','Free towel'),'available',true,'coaching','none','coachSessions',0,'focusTags',jsonb_build_array('strength','cardio')));
 reset role;
+select pg_temp.ok((select features->0='"Everything in Momentum Max"'::jsonb from public.ff_plans where workspace='production' and id='elite'),'Renaming Momentum updated Performance''s "Everything in" line');
 select pg_temp.ok((select count(*)=0 from pl_before b join public.ff_memberships m on m.id=b.id join public.ff_invoices i on i.membership_id=m.id
  where m.terms is distinct from b.terms or i.amount_cents<>b.amount_cents or i.paid_cents<>b.paid_cents),'Plan edits rewrite no cycle''s terms and no invoice');
 select pg_temp.ok((select terms->>'name'='Momentum' and (terms->>'priceCents')::int=149900 and (terms->>'days')::int=30 and terms->>'coaching'='group' and terms->'features' ? 'Monthly fitness check-in'
@@ -291,8 +296,7 @@ reset role;
 select pg_temp.ok((select terms->>'source'='purchase' and terms->>'name'='Performance' and (terms->>'priceCents')::int=249900 from public.ff_memberships where member_id=pg_temp.id('walk')),'A walk-in cash renewal takes the plan''s terms');
 select pg_temp.as_user('admin');
 set local role authenticated;
-select public.ff_plan_admin('update',jsonb_build_object('id','elite','name','Performance','priceCents',259900,'days',30,'description','Focused coaching for your personal best.',
- 'features',jsonb_build_array('Everything in Momentum','4 personal training sessions','Personalized workout plan','Priority class booking'),'available',true,'coaching','personal','coachSessions',4,'focusTags',jsonb_build_array('strength','mobility')));
+select public.ff_plan_admin('update',pg_temp.body('elite','{"priceCents":259900}'));
 reset role;
 select pg_temp.as_user('staff');
 set local role authenticated;
@@ -310,8 +314,7 @@ reset role;
 select pg_temp.ok((select terms->>'source'='purchase' and (terms->>'priceCents')::int=259900 from public.ff_memberships where member_id=pg_temp.id('pm')),'A PayMongo renewal takes the plan''s terms when its cycle is made');
 select pg_temp.as_user('admin');
 set local role authenticated;
-select public.ff_plan_admin('update',jsonb_build_object('id','elite','name','Performance','priceCents',269900,'days',30,'description','Focused coaching for your personal best.',
- 'features',jsonb_build_array('Everything in Momentum','4 personal training sessions','Personalized workout plan','Priority class booking'),'available',true,'coaching','personal','coachSessions',4,'focusTags',jsonb_build_array('strength','mobility')));
+select public.ff_plan_admin('update',pg_temp.body('elite','{"priceCents":269900}'));
 reset role;
 update public.ff_checkouts set status='expired' where id=current_setting('pl.checkout')::uuid;
 select pg_temp.as_user('pm');
@@ -340,11 +343,78 @@ insert into auth.users(id,email,raw_app_meta_data,raw_user_meta_data) values(pg_
  jsonb_build_object('form_fitness',true,'name','LOCAL TEST Plans m5','phone','09170000053','plan','basic','start',current_setting('pl.today')));
 select pg_temp.ok((select terms->>'source'='purchase' and terms->'features' ? 'Free towel' from public.ff_memberships where member_id=pg_temp.id('m5')),'A plan given when the account is made takes the plan''s terms then');
 
--- 7. Grants: administrators use public.ff_plan_admin; the helpers are nobody's. ---------------------------------------
+-- 7. TRUNCATE can't empty the plans, or through CASCADE the history that references them. --------------------------
+-- The fixtures above left cycles, invoices, payments, checkouts and registrations; every row of every table that
+-- references plans, directly or not, must still be there after each refused TRUNCATE.
+create temporary table pl_history as
+ select 'plans' as t,count(*) as n from public.ff_plans union all select 'cycles',count(*) from public.ff_memberships
+ union all select 'registrations',count(*) from public.ff_registrations union all select 'invoices',count(*) from public.ff_invoices
+ union all select 'payments',count(*) from public.ff_payments union all select 'checkouts',count(*) from public.ff_checkouts
+ union all select 'submissions',count(*) from public.ff_submissions union all select 'checkins',count(*) from public.ff_checkins
+ union all select 'paymongo_attempts',count(*) from public.ff_paymongo_attempts;
+grant select on pl_history to service_role;
+create function pg_temp.sqlstate_of(statement text) returns text language plpgsql as $$
+declare state text:='(no error)'; begin begin execute statement; exception when others then state:=sqlstate; end; return state; end $$;
+select pg_temp.ok((select n>0 from pl_history where t='payments') and (select n>0 from pl_history where t='checkouts') and (select n>0 from pl_history where t='registrations'),'There is history to protect: payments, checkouts and registrations');
+select pg_temp.ok(not has_table_privilege('service_role','public.ff_plans','truncate') and not has_table_privilege('authenticated','public.ff_plans','truncate') and not has_table_privilege('anon','public.ff_plans','truncate'),
+ 'No API role holds TRUNCATE on plans any more');
+set local role service_role;
+select pg_temp.ok(pg_temp.sqlstate_of('truncate public.ff_plans')='42501','The service key cannot TRUNCATE plans (permission denied)');
+select pg_temp.ok(pg_temp.sqlstate_of('truncate public.ff_plans cascade')='42501','nor TRUNCATE ... CASCADE through them');
+reset role;
+select pg_temp.denied('truncate public.ff_plans','The database owner cannot TRUNCATE plans (their history references them)');
+select pg_temp.fails_with('truncate public.ff_plans cascade','Plans can''t be deleted.','nor TRUNCATE ... CASCADE, which would empty every cycle, invoice, payment and check-in');
+select pg_temp.fails_with('truncate public.ff_plans restart identity cascade','Plans can''t be deleted.','in any form');
+select pg_temp.ok((select count(*)=0 from pl_history h where h.n<>(case h.t when 'plans' then (select count(*) from public.ff_plans) when 'cycles' then (select count(*) from public.ff_memberships)
+  when 'registrations' then (select count(*) from public.ff_registrations) when 'invoices' then (select count(*) from public.ff_invoices) when 'payments' then (select count(*) from public.ff_payments)
+  when 'checkouts' then (select count(*) from public.ff_checkouts) when 'submissions' then (select count(*) from public.ff_submissions) when 'checkins' then (select count(*) from public.ff_checkins)
+  when 'paymongo_attempts' then (select count(*) from public.ff_paymongo_attempts) end)),'After every refused TRUNCATE, all plans and all dependent history are still there');
+select pg_temp.ok((select tgtype&32<>0 and tgenabled='O' from pg_trigger where tgname='ff_plans_no_truncate' and tgrelid='public.ff_plans'::regclass),'A statement trigger refuses TRUNCATE on plans');
+
+-- 8. Renaming a plan that others include keeps their "Everything in" line resolving; cycles already bought keep theirs.
+-- Here Essential (basic) becomes "Essential Plus" and gains a benefit. Momentum (now "Momentum Max") includes it, and
+-- Performance includes Momentum; m2's latest cycle is a Momentum purchase made before this rename.
+create temporary table pl_snapshot as select id,terms from public.ff_memberships;
+select pg_temp.as_user('admin');
+set local role authenticated;
+select set_config('pl.renamed',public.ff_plan_admin('update',pg_temp.body('basic',jsonb_build_object('name','Essential Plus',
+ 'features',(select features||'["Sauna access"]'::jsonb from public.ff_plans where workspace='production' and id='basic'))))::text,true);
+reset role;
+select pg_temp.ok((select jsonb_agg(u->>'id' order by u->>'id')='["plus","zz-test"]'::jsonb and bool_and(u->'features' ? 'Everything in Essential Plus')
+ from jsonb_array_elements(current_setting('pl.renamed')::jsonb->'alsoUpdated') u),'Renaming Essential reports the plans whose line followed it: Momentum and the test plan that includes it');
+select pg_temp.ok((select features ? 'Everything in Essential Plus' and not features ? 'Everything in Essential' from public.ff_plans where workspace='production' and id='plus'),
+ 'Momentum''s catalog line now names Essential Plus');
+select pg_temp.ok((select features ? 'Everything in Momentum Max' from public.ff_plans where workspace='production' and id='elite'),'Performance''s line is untouched (Momentum wasn''t renamed now)');
+select pg_temp.ok((select features ? 'Everything in Essential' from public.ff_plans where workspace='demo' and id='plus'),'The demo workspace''s plans are not touched');
+select pg_temp.as_user('staff');
+set local role authenticated;
+select public.ff_command('renew',jsonb_build_object('memberId',k,'plan',p,'start',current_setting('pl.today'))) from (values (pg_temp.id('member'),'plus'),(pg_temp.id('other'),'elite')) as x(k,p);
+reset role;
+select pg_temp.ok((select terms->'included'=jsonb_build_array(jsonb_build_object('line','Everything in Essential Plus','plan','Essential Plus',
+  'features','["Unlimited gym access","All strength equipment","Locker room access","Free towel","Sauna access"]'::jsonb)) and terms->'features' ? 'Everything in Essential Plus'
+ from public.ff_memberships where member_id=pg_temp.id('member')),'A Momentum purchase after the rename includes Essential Plus''s benefits, the new one included');
+select pg_temp.ok((select terms->'included'->0->>'line'='Everything in Momentum Max' and terms->'included'->0->'features' ? 'Sauna access' and terms->'included'->0->'features' ? 'Weekly check-in'
+ from public.ff_memberships where member_id=pg_temp.id('other')),'A Performance purchase after it includes them too, through Momentum');
+select pg_temp.ok((select count(*)=0 from pl_snapshot s join public.ff_memberships m using (id) where m.terms is distinct from s.terms),'Every cycle bought before the rename keeps its terms exactly');
+select pg_temp.ok((select terms->'included'->0->>'plan'='Essential' and not terms->'included'->0->'features' ? 'Sauna access' and terms->'features' ? 'Everything in Essential'
+ from public.ff_memberships where id=(select id from public.ff_memberships where member_id=pg_temp.id('m2') order by start_date desc limit 1)),'m2''s Momentum cycle still says "Everything in Essential", with the list as bought');
+-- References must resolve: another plan's exact name, never the plan itself, and no plan ends up including itself.
+select pg_temp.as_user('admin');
+set local role authenticated;
+select pg_temp.fails_with($q$select public.ff_plan_admin('update',pg_temp.body('plus','{"features":["Everything in Gold","Unlimited group classes"]}'))$q$,'"Everything in Gold" names no other plan.','A line naming no plan is refused');
+select pg_temp.fails_with($q$select public.ff_plan_admin('update',pg_temp.body('plus','{"features":["Everything in Essential","Unlimited group classes"]}'))$q$,'"Everything in Essential" names no other plan.','A line naming a plan''s old name is refused');
+select pg_temp.fails_with($q$select public.ff_plan_admin('update',pg_temp.body('basic','{"features":["Everything in Essential Plus"]}'))$q$,'A plan can''t include itself.','A plan can''t include itself');
+select pg_temp.fails_with($q$select public.ff_plan_admin('update',pg_temp.body('basic','{"features":["Everything in Performance"]}'))$q$,'Performance already includes Essential Plus, so Essential Plus can''t include Performance.','nor a plan that already includes it, through another plan');
+select public.ff_plan_admin('create',pg_temp.plan('{"id":"zz-loop","name":"LOCAL TEST Loop","features":["everything in local test plan"]}'));
+reset role;
+select pg_temp.ok((select ff_private.plan_terms(p,'purchase')->'included'->0->>'plan'='LOCAL TEST Plan' from public.ff_plans p where workspace='production' and id='zz-loop'),
+ 'A plan may name another in any letter case, and new purchases resolve it');
+
+-- 9. Grants: administrators use public.ff_plan_admin; the helpers are nobody's. ---------------------------------------
 select pg_temp.ok(not has_function_privilege('anon','public.ff_plan_admin(text,jsonb)','execute') and has_function_privilege('authenticated','public.ff_plan_admin(text,jsonb)','execute'),'Only signed-in accounts may call plan management (and it checks for an administrator)');
 select pg_temp.ok(not has_function_privilege('anon','ff_private.plan_admin(text,jsonb)','execute'),'Signed-out callers cannot reach the private function');
 select pg_temp.ok((select not bool_or(has_function_privilege('authenticated',f,'execute')) and not bool_or(has_function_privilege('anon',f,'execute')) from unnest(array['ff_private.focus_tags(text[])','ff_private.plan_features_ok(jsonb)',
- 'ff_private.plan_features_flat(text,jsonb,text[])','ff_private.plan_included(text,jsonb,text)','ff_private.plan_terms(public.ff_plans,text)','ff_private.terms_ok(jsonb)','ff_private.purchased_terms()','ff_private.plan_guard()']) f),'The term and plan helpers are internal');
+ 'ff_private.plan_features_flat(text,jsonb,text[])','ff_private.plan_included(text,jsonb,text)','ff_private.plan_reaches(text,text,text)','ff_private.plan_terms(public.ff_plans,text)','ff_private.terms_ok(jsonb)','ff_private.purchased_terms()','ff_private.plan_guard()']) f),'The term and plan helpers are internal');
 select pg_temp.ok(not has_table_privilege('authenticated','public.ff_plans','insert') and not has_table_privilege('authenticated','public.ff_plans','update') and not has_table_privilege('authenticated','public.ff_plans','delete')
  and not has_table_privilege('authenticated','public.ff_memberships','update'),'Signed-in accounts can only read plans and cycles');
 select pg_temp.ok((select prosecdef and proconfig=array['search_path=""'] from pg_proc where oid='ff_private.plan_admin(text,jsonb)'::regprocedure)

@@ -3,17 +3,20 @@
 -- 1. Plans gain a coaching level (none, group or personal), coach sessions per cycle (0 to 30, and 0 when there is
 --    no coach) and focus tags for the plan recommendation (strength, cardio, mobility, group_classes, kept in that
 --    order). A description is at most 200 characters and features at most 10 lines of 80 characters, without < or >
---    or line breaks. Plan names are unique within a workspace, ignoring case, so an "Everything in <plan>" line names
---    one plan. The three plans keep their IDs, prices, lengths, descriptions and features in both workspaces; this
---    only sets their coaching and focus tags.
+--    or line breaks. Plan names are unique within a workspace, ignoring case. A feature line "Everything in <plan>"
+--    must name another plan of the workspace, no plan may include itself (directly or through others), and renaming
+--    a plan updates the lines that name it, so the reference always resolves. The three plans keep their IDs,
+--    prices, lengths, descriptions and features in both workspaces; this only sets their coaching and focus tags.
 -- 2. ff_private.plan_admin is the one way to add or change a plan: administrators of the caller's own workspace,
 --    checked here from the session. ff_plans refuses every other insert or update (ff_private.command's old 'plans'
---    action and the service key included) and every delete. A plan's ID never changes; a plan is retired by making
---    it unavailable.
+--    action and the service key included), every delete and any TRUNCATE (which, with CASCADE, would also empty
+--    every cycle, invoice, payment and check-in). A plan's ID never changes; a plan is retired by making it unavailable.
 -- 3. Purchased terms: each membership cycle, and each first registration, keeps what was bought (name, price,
 --    length, description, features, what each "Everything in <plan>" line meant, and coaching), taken from the plan
---    row in the transaction that creates it. The terms never change afterwards. Existing rows are filled once below,
---    from the most trustworthy values already stored.
+--    row in the transaction that creates it. The terms never change afterwards. Existing rows are filled once below:
+--    from values stored with each row where they exist (invoice price, cycle dates, the registration's own copy),
+--    and otherwise from the catalog as captured while this migration runs, a baseline rather than a record of what
+--    was shown at the time of purchase.
 -- 4. Retired plans still can't be chosen for a new cycle or registration, but a cycle, invoice or registration that
 --    already exists stays payable on its own terms: paymongo_prepare no longer re-checks availability for those.
 
@@ -90,6 +93,23 @@ begin
  return included;
 end $$;
 
+-- Does plan start include plan target, directly or through the plans it includes? Follows "Everything in <plan>" lines
+-- by name within the workspace; used to refuse a plan that would end up including itself.
+create function ff_private.plan_reaches(w text, start text, target text) returns boolean
+language plpgsql stable set search_path='' as $$
+declare frontier text[]:=array[start]; seen text[]:='{}';
+begin
+ while cardinality(frontier)>0 loop
+  if target=any(frontier) then return true; end if;
+  seen:=seen||frontier;
+  select coalesce(array_agg(distinct r.id),'{}') into frontier
+  from public.ff_plans x cross join lateral jsonb_array_elements_text(x.features) as f(line)
+  join public.ff_plans r on r.workspace=w and lower(r.name)=lower(btrim(substr(f.line,15)))
+  where x.workspace=w and x.id=any(frontier) and f.line ~* '^everything in .' and r.id<>all(seen);
+ end loop;
+ return false;
+end $$;
+
 -- The terms a cycle or registration keeps. source says where they came from (see the backfill below).
 create function ff_private.plan_terms(p public.ff_plans, source text) returns jsonb
 language sql stable set search_path='' as $$
@@ -140,9 +160,19 @@ end $$;
 create trigger ff_memberships_terms before insert or update of terms on public.ff_memberships for each row execute function ff_private.purchased_terms();
 create trigger ff_registrations_terms before insert or update of terms on public.ff_registrations for each row execute function ff_private.purchased_terms();
 
--- The backfill, once. Gate 1 lists the row counts.
--- a) First registrations: name, price, length and features as stored when the registration was made; description,
---    coaching and the meaning of "Everything in" lines from the catalog now (they were never stored).
+-- The backfill can freeze an "Everything in <plan>" line only if it names another plan of its workspace.
+do $$ begin
+ if exists(select 1 from public.ff_plans x cross join lateral jsonb_array_elements_text(x.features) as f(line)
+  where f.line ~* '^everything in .' and not exists(select 1 from public.ff_plans r where r.workspace=x.workspace and r.id<>x.id and lower(r.name)=lower(btrim(substr(f.line,15))))) then
+  raise exception 'A plan''s "Everything in" line names no other plan of its workspace. Fix the catalog before this migration.';
+ end if;
+end $$;
+
+-- The backfill, once. Gate 1 lists the row counts. No catalog history was kept before this migration, so values not
+-- stored with a row come from the catalog as captured now: a baseline, marked by its source, not proof of what a
+-- member was shown when buying.
+-- a) First registrations: name, price, length and features as the registration stored them; description, coaching
+--    and the meaning of "Everything in" lines from the catalog as captured now (registrations never stored them).
 update public.ff_registrations r set terms=jsonb_build_object('name',r.plan_name,'priceCents',r.amount_cents,'days',r.days,'description',p.description,
  'features',r.features,'included',ff_private.plan_included(r.workspace,r.features,r.plan_id),'coaching',p.coaching,'coachSessions',p.coach_sessions,'source','registration-backfill')
 from public.ff_plans p where p.workspace=r.workspace and p.id=r.plan_id and r.terms is null;
@@ -150,9 +180,8 @@ from public.ff_plans p where p.workspace=r.workspace and p.id=r.plan_id and r.te
 update public.ff_memberships m set terms=r.terms
 from public.ff_registrations r where r.workspace=m.workspace and r.member_id=m.member_id and r.plan_id=m.plan_id and r.start_date=m.start_date
  and r.status='provisioned' and m.terms is null;
--- c) Every other cycle: the price its invoice was created with and its own dates; name, description, features and
---    coaching from the catalog now. Until this migration the app could change only a plan's name, price and
---    availability, and none of the hosted plans' names or prices has changed, so these are the terms sold.
+-- c) Every other cycle: the price its invoice was created with and its own dates, as stored; name, description,
+--    features, coaching and the meaning of "Everything in" lines from the catalog as captured now.
 update public.ff_memberships m set terms=jsonb_build_object('name',p.name,
  'priceCents',coalesce((select i.amount_cents from public.ff_invoices i where i.membership_id=m.id),p.price_cents),'days',m.end_date-m.start_date+1,
  'description',p.description,'features',p.features,'included',ff_private.plan_included(p.workspace,p.features,p.id),'coaching',p.coaching,
@@ -163,23 +192,32 @@ alter table public.ff_registrations alter column terms set not null;
 
 -- 3. Plan management ----------------------------------------------------------------------------------------------
 
--- Only ff_private.plan_admin writes plans (it sets ff.plan_admin for its own statement), and nothing deletes them.
+-- Only ff_private.plan_admin writes plans (it sets ff.plan_admin for its own statement), and nothing deletes them,
+-- row by row or with TRUNCATE. TRUNCATE skips row triggers, and TRUNCATE ... CASCADE would empty every table that
+-- references plans (cycles, registrations, invoices, payments, submissions, checkouts, check-ins), so it has its own
+-- statement trigger, which stops even the database owner, and the service key loses the TRUNCATE privilege.
 create function ff_private.plan_guard() returns trigger
 language plpgsql set search_path='' as $$
 begin
- if tg_op='DELETE' then raise exception 'Plans can''t be deleted. Make the plan unavailable to retire it.'; end if;
+ if tg_op in ('DELETE','TRUNCATE') then raise exception 'Plans can''t be deleted. Make the plan unavailable to retire it.'; end if;
  if coalesce(current_setting('ff.plan_admin',true),'')<>'on' then raise exception 'Plans are changed only in plan management. Reload the page and try again.'; end if;
  if tg_op='UPDATE' and (new.id is distinct from old.id or new.workspace is distinct from old.workspace) then raise exception 'A plan''s ID can''t be changed.'; end if;
  return case when tg_op='DELETE' then old else new end;
 end $$;
 create trigger ff_plans_guard before insert or update or delete on public.ff_plans for each row execute function ff_private.plan_guard();
+create trigger ff_plans_no_truncate before truncate on public.ff_plans for each statement execute function ff_private.plan_guard();
+revoke truncate on public.ff_plans from service_role;
 
 -- Add or change a plan: administrators of the caller's own workspace (from the session, never the request).
 -- action 'create' adds one ('id' must be new; repeating an identical create returns the saved plan); 'update'
--- replaces every field of an existing plan except its ID. All fields are required. Returns the plan as saved.
+-- replaces every field of an existing plan except its ID. All fields are required. A feature line "Everything in
+-- <plan>" must name another plan of the workspace that doesn't already include this one. Renaming a plan updates
+-- those lines in the plans that include it, so they keep resolving; those plans come back as alsoUpdated.
+-- Returns the plan as saved.
 create function ff_private.plan_admin(action text, body jsonb) returns jsonb
 language plpgsql security definer set search_path='' as $$
-declare a public.ff_profiles; p public.ff_plans; v public.ff_plans; item jsonb; line text; tags text[]; features jsonb:='[]';
+declare a public.ff_profiles; p public.ff_plans; v public.ff_plans; saved public.ff_plans; ref public.ff_plans; item jsonb; line text; tags text[];
+ features jsonb:='[]'; also jsonb:='[]';
 begin
  a:=ff_private.actor();
  if a.id is null then raise exception 'Please sign in to continue.' using errcode='42501'; end if;
@@ -229,6 +267,14 @@ begin
  -- One plan per ID at a time; names stay unique in the workspace, so an "Everything in <plan>" line names one plan.
  perform pg_advisory_xact_lock(hashtextextended('ff_plan:'||v.workspace||':'||v.id,0));
  if exists(select 1 from public.ff_plans where workspace=v.workspace and lower(name)=lower(v.name) and id<>v.id) then raise exception 'Another plan already uses this name.'; end if;
+ -- Each "Everything in <plan>" line names another plan of this workspace, and that plan doesn't include this one.
+ for line in select value from jsonb_array_elements_text(v.features) loop
+  continue when line !~* '^everything in .';
+  if lower(btrim(substr(line,15)))=lower(v.name) then raise exception 'A plan can''t include itself. Remove "%".',line; end if;
+  select r.* into ref from public.ff_plans r where r.workspace=v.workspace and r.id<>v.id and lower(r.name)=lower(btrim(substr(line,15)));
+  if not found then raise exception '"%" names no other plan. After "Everything in", use another plan''s exact name.',line; end if;
+  if ff_private.plan_reaches(v.workspace,ref.id,v.id) then raise exception '% already includes %, so % can''t include %.',ref.name,v.name,v.name,ref.name; end if;
+ end loop;
  select * into p from public.ff_plans where workspace=v.workspace and id=v.id for update;
  if action='create' then
   if found then
@@ -240,16 +286,27 @@ begin
   end if;
   perform set_config('ff.plan_admin','on',true);
   insert into public.ff_plans(workspace,id,name,price_cents,days,available,description,features,coaching,coach_sessions,focus_tags)
-  values(v.workspace,v.id,v.name,v.price_cents,v.days,v.available,v.description,v.features,v.coaching,v.coach_sessions,v.focus_tags) returning * into p;
+  values(v.workspace,v.id,v.name,v.price_cents,v.days,v.available,v.description,v.features,v.coaching,v.coach_sessions,v.focus_tags) returning * into saved;
  else
   if not found then raise exception 'Plan not found.'; end if;
   perform set_config('ff.plan_admin','on',true);
   update public.ff_plans set name=v.name,price_cents=v.price_cents,days=v.days,available=v.available,description=v.description,features=v.features,
    coaching=v.coaching,coach_sessions=v.coach_sessions,focus_tags=v.focus_tags
-  where workspace=v.workspace and id=v.id returning * into p;
+  where workspace=v.workspace and id=v.id returning * into saved;
+  -- A renamed plan stays included where it was: the plans that include it take its new name in that line. Cycles
+  -- already bought keep the line, and its list, as they were.
+  if saved.name is distinct from p.name then
+   with renamed as (
+    update public.ff_plans x set features=(select jsonb_agg(case when f.line ~* '^everything in .' and lower(btrim(substr(f.line,15)))=lower(p.name)
+      then 'Everything in '||saved.name else f.line end order by f.n) from jsonb_array_elements_text(x.features) with ordinality as f(line,n))
+    where x.workspace=v.workspace and x.id<>v.id
+     and exists(select 1 from jsonb_array_elements_text(x.features) as f(line) where f.line ~* '^everything in .' and lower(btrim(substr(f.line,15)))=lower(p.name))
+    returning x.*)
+   select coalesce(jsonb_agg(to_jsonb(renamed) order by renamed.id),'[]') into also from renamed;
+  end if;
  end if;
  perform set_config('ff.plan_admin','',true);
- return to_jsonb(p);
+ return to_jsonb(saved)||jsonb_build_object('alsoUpdated',also);
 end $$;
 
 create function public.ff_plan_admin(action text, body jsonb) returns jsonb
@@ -372,7 +429,7 @@ end $function$;
 -- has no use for it (and plan_admin refuses a caller without a session), so the hosted default grant to service_role
 -- on new public functions is taken back too, leaving the same grants as a local stack.
 revoke all on function ff_private.focus_tags(text[]),ff_private.plan_features_ok(jsonb),ff_private.plan_features_flat(text,jsonb,text[]),
- ff_private.plan_included(text,jsonb,text),ff_private.plan_terms(public.ff_plans,text),ff_private.terms_ok(jsonb),ff_private.purchased_terms(),
+ ff_private.plan_included(text,jsonb,text),ff_private.plan_reaches(text,text,text),ff_private.plan_terms(public.ff_plans,text),ff_private.terms_ok(jsonb),ff_private.purchased_terms(),
  ff_private.plan_guard(),ff_private.plan_admin(text,jsonb) from public,anon,authenticated;
 grant execute on function ff_private.plan_admin(text,jsonb) to authenticated;
 revoke all on function public.ff_plan_admin(text,jsonb) from public,anon,authenticated,service_role;

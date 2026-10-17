@@ -578,17 +578,40 @@ What changed:
   `REPORT_TASK_12A_GATE1.md` has the full SQL, the diffs and the checks.
 
 Test added:
-- `tests/plans-database.sql` (125 checks):
-  - administrators only, workspace isolation, every field checked, no other write path, no delete;
+- `tests/plans-database.sql` (148 checks):
+  - administrators only, workspace isolation, every field checked, no other write path, no delete or TRUNCATE (dependent history intact);
   - terms through plan edits, retirement, and every way a cycle is created, including retries;
+  - renaming an included plan, and "Everything in" lines that must resolve;
   - registration completion and the grants.
 - `tests/plans.js` (`npm run test:plans`, real stack):
   - the API, an email after an edit, retirement, and a plan edit racing a new cycle in both orders;
-  - the screens for administrators, staff and members on desktop and phone.
-- `tests/unit.test.js` and `tests/attendance.test.js`: the plan form, coaching labels, the terms view, the email and the scan screen.
+  - the screens for administrators, staff and members on desktop and phone, including a rename that another plan follows.
+- `tests/unit.test.js` and `tests/attendance.test.js`: the plan form, coaching labels, the terms view, the plans that follow a rename, the email and the scan screen.
 - `tests/attendance.js`: `/checkin-status` also returns the plan name as bought.
 
 Live steps after "go": push the migration first, then release (fast-forward `main`), then smoke-test.
+
+Review round 1 (2026-10-17, before any push). Three findings, fixed locally in the same unreleased migration:
+- **TRUNCATE.**
+  - The plan guard refused row deletes only. TRUNCATE skips row triggers, and `TRUNCATE ff_plans CASCADE` by the database owner would have emptied every cycle, registration, invoice, payment, submission, checkout and check-in.
+  - The service key also held TRUNCATE on plans.
+  - Now a statement trigger refuses any TRUNCATE of plans, the owner's included, and the service key's TRUNCATE on plans is revoked.
+  - Tested: the service key gets permission denied, the owner is refused in every form, and all dependent history is still there afterwards.
+- **Renaming an included plan.**
+  - Reproduced: after renaming Essential, Momentum's "Everything in Essential" named no plan, so a new Momentum purchase got no Essential benefits.
+  - Now renaming a plan updates the "Everything in" lines that name it in the same transaction, and the screen shows which plans changed. A line must name another plan exactly, and no plan may include itself, directly or through another.
+  - The migration also refuses to run if the catalog has a line that names no plan.
+  - Tested: new purchases include the renamed plan's benefits, including one added in the same edit, and every cycle bought before keeps its terms exactly.
+- **Backfill wording.** Values that weren't stored with a cycle or registration are described as the catalog baseline captured during the migration. They are not presented as proof of what a member was shown when buying.
+
+## BUG-018: The service key and the database owner can TRUNCATE the history tables   (status: noticed)
+Found: 2026-10-17 while closing FEATURE-008's TRUNCATE gap. Where: the database. Same result locally and live (read-only check).
+What: `service_role` and `postgres` hold TRUNCATE on `ff_memberships`, `ff_registrations`, `ff_invoices`, `ff_payments`, `ff_submissions`, `ff_checkouts` and `ff_checkins`, and no table has a TRUNCATE trigger.
+- `service_role` can't log in, and the Data API offers no TRUNCATE, so only someone with the database password (SQL editor or CLI) could run one.
+- Nothing would stop an accidental `TRUNCATE … CASCADE` there.
+
+FEATURE-008 guards only the plans: a cascade starting from plans is refused now.
+Possible fix, for Clark to decide (it may belong with SEC-001): the same statement trigger on each history table, and revoke TRUNCATE from `service_role`.
 
 ## BUG-017: A walk-in renewal on a plan retired meanwhile says "Plan price changed"   (status: noticed)
 Found: 2026-10-17 while building FEATURE-008. Where: Renewals & payments → Walk-in renewal; roles: staff, admin.

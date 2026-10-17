@@ -152,6 +152,13 @@ try{
  assert.equal(Number(psql(`select price_cents from public.ff_plans where workspace='production' and id='${racePlan}';`)),175000);
  pass('A plan edit racing a new cycle: the later one waits on the plan row, so the cycle\'s terms and invoice come from one whole version (the edited one if the edit was first, the old one if not)');
 
+ // A base plan and a child that includes it, for the rename below; one member buys the child before the rename.
+ const baseId=`zz-e2e-${tag}-base`,childId=`zz-e2e-${tag}-child`,baseName=`ZZ Base ${tag}`,childName=`ZZ Child ${tag}`,renamedBase=`ZZ Base Renamed ${tag}`;planIds.push(baseId,childId);
+ await adminApi.post('/plans',{...planBody(baseId,{name:baseName,price:'500',features:['Base floor'],coaching:'none',coachSessions:0}),action:'create'});
+ await adminApi.post('/plans',{...planBody(childId,{name:childName,price:'800',features:[`Everything in ${baseName}`,'Child extra']}),action:'create'});
+ assert.match((await adminApi.post('/plans',planBody(childId,{name:childName,features:['Everything in Nothing Here']}),400)).error,/"Everything in Nothing Here" names no other plan/,'a line naming no plan is refused');
+ const childBuyer=await addMember(staffApi,'ChildBuyer',{plan:childId,start:today()});
+
  // 5. The screens. --------------------------------------------------------------------------------------------------
  browser=await chromium.launch({channel:'msedge',headless:true});
  const errors=[];
@@ -204,6 +211,14 @@ try{
  assert.match(await row.innerText(),/₱1,999\.50 \/ 60 days[\s\S]*No coach/);
  await page.locator('#toast').filter({hasText:'Existing memberships and invoices keep their terms.'}).waitFor();
  pass('Administrator, desktop: coaching on every card; Add plan shows Saving…, sends once, and the new plan appears as the server saved it without a reload; edit errors stay in the form');
+ // Renaming a plan that another includes: the other plan's "Everything in" line follows, shown at once.
+ await page.locator(`[data-plan-row="${baseId}"]`).getByRole('button',{name:'Edit plan',exact:true}).click();
+ await page.getByLabel('Plan name *',{exact:true}).fill(renamedBase);await page.getByLabel('Features',{exact:true}).fill('Base floor\nBase sauna');
+ await save.click();await page.locator('#plan-form').waitFor({state:'detached'});
+ await page.locator('#toast').filter({hasText:`${childName} now says “Everything in ${renamedBase}”.`}).waitFor();
+ assert.match(await page.locator('.plan-card',{has:page.getByRole('heading',{name:childName,exact:true})}).innerText(),new RegExp(`Everything in ${renamedBase}`),'the child card shows the new line');
+ assert.equal(await page.evaluate(()=>window.__noReload),true,'without a reload');
+ pass('Renaming a plan that another includes: the other plan\'s "Everything in" line follows the new name, shown at once, and the toast says so');
  // Administrator, phone.
  await page.setViewportSize({width:390,height:844});await plansTab(page);
  assert.equal(await fits(page),true,'phone: no sideways scroll on Membership plans');
@@ -241,6 +256,15 @@ try{
  assert.match(await momentumPage.locator('.membership-privileges').innerText(),/Everything in Essential\s*Unlimited gym access · All strength equipment · Locker room access · Fitness orientation[\s\S]*Group coaching/);
  await momentumPage.close();
  pass('"Everything in Essential" shows the Essential features as they were when the cycle was bought');
+ // After the rename: a new purchase of the child includes the renamed base's benefits; the earlier one keeps its own.
+ const childBuyer2=await addMember(staffApi,'ChildBuyer2',{plan:childId,start:today()});
+ const newTerms=(await (await signedIn(app.origin,childBuyer2)).get('/state')).members[0].terms,oldTerms=(await (await signedIn(app.origin,childBuyer)).get('/state')).members[0].terms;
+ assert.deepEqual(newTerms.included,[{line:`Everything in ${renamedBase}`,plan:renamedBase,features:['Base floor','Base sauna']}],'bought after the rename');
+ assert.deepEqual(oldTerms.included,[{line:`Everything in ${baseName}`,plan:baseName,features:['Base floor']}],'bought before the rename, unchanged');
+ const oldPage=await open(childBuyer);await oldPage.evaluate(()=>navigate('members'));await oldPage.locator('.membership-privileges').waitFor();
+ assert.match(await oldPage.locator('.membership-privileges').innerText(),new RegExp(`Everything in ${baseName}\\s*Base floor`));assert.doesNotMatch(await oldPage.locator('.membership-privileges').innerText(),/Base sauna|Renamed/);
+ await oldPage.close();
+ pass('After the rename, a new purchase includes the renamed plan\'s benefits (the added one too); the member who bought before still sees "Everything in" the old name with the list as bought');
  assert.deepEqual(errors,[],'no JavaScript errors');
  console.log(`PASS: ${passed.length} plan management checks`);
 }finally{

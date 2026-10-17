@@ -166,11 +166,12 @@ export async function handle(req,res,env=process.env) {
       return send(res,200,{goal:answers.goal,survey:surveyView(saved)});
     }
     // Task 12A: plan management, through ff_private.plan_admin only (administrators of their own workspace, checked
-    // in the database). It answers with the plan as saved, so the screen shows what the server stored.
+    // in the database). It answers with the plan as saved, and any plan whose "Everything in" line followed a rename,
+    // so the screen shows what the server stored.
     if(path==='/plans'){
       admin();const request=planRequest(body);
       const saved=result(await client.rpc('ff_plan_admin',request));
-      return send(res,200,{plan:planView(saved),alreadySaved:saved.alreadySaved===true});
+      return send(res,200,{plan:planView(saved),alreadySaved:saved.alreadySaved===true,alsoUpdated:(saved.alsoUpdated||[]).map(planView)});
     }
     if(path==='/staff'){admin();return send(res,201,await createStaff(client,body,env,origin));}
     if(path==='/staff/update'){admin();return send(res,200,await updateStaff(client,body));}

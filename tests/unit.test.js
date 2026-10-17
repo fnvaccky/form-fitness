@@ -1314,3 +1314,17 @@ test('purchased terms are shown like a plan, with what each "Everything in" line
  assert.deepEqual(termsLines(terms),['Everything in Essential: Unlimited gym access, Locker room access','Unlimited group classes']);
  assert.deepEqual(termsLines({features:['Everything in Gold','Sauna'],included:[]}),['Everything in Gold','Sauna'],'a line that named no plan stays as written');
 });
+
+test('plan management answers with the plan as saved and the plans whose "Everything in" line followed a rename',async()=>{
+ const row=(id,name,features)=>({workspace:'production',id,name,price_cents:89900,days:30,available:true,description:'',features,coaching:'none',coach_sessions:0,focus_tags:[]});
+ const admin=await consoleSession('admin',{routes:{'/rest/v1/rpc/ff_plan_admin':(req,res)=>res.end(JSON.stringify({...row('basic','Essential Plus',['Gym']),alsoUpdated:[row('plus','Momentum',['Everything in Essential Plus'])]}))}});
+ try{
+  const response=await admin.post('/plans',{action:'update',id:'basic',name:'Essential Plus',price:'899',days:30,description:'',features:['Gym'],available:true,coaching:'none',coachSessions:0,focusTags:[]});
+  const value=await response.json();
+  assert.equal(response.status,200,value.error);
+  assert.equal(value.plan.name,'Essential Plus');assert.equal(value.plan.coachingLabel,'No coach');assert.equal(value.alreadySaved,false);
+  assert.deepEqual(value.alsoUpdated.map(p=>[p.id,p.features[0]]),[['plus','Everything in Essential Plus']]);
+  const sent=admin.state.requests.find(r=>r.path==='/rest/v1/rpc/ff_plan_admin').body;
+  assert.equal(sent.action,'update');assert.equal(sent.body.priceCents,89900);assert.equal('price' in sent.body,false,'the price goes as centavos only');
+ }finally{admin.close();}
+});
