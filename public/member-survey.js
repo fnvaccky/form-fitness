@@ -117,7 +117,7 @@ function deskSurveyAnswers() {
   memberMembership = function() {
     const member = memberById(selectedMember), marker = '<div class="panel-header" style="padding-left:0">';
     let html = surveyBaseMembership();
-    if (member && html.includes(marker)) html = html.replace(marker, memberSurveyPanel(member) + marker);
+    if (member && html.includes(marker)) html = html.replace(marker, memberSurveyPanel(member) + (window.sampleTrainingPanel?.(member) || '') + marker);
     return ownMemberWithoutSurvey() ? withSurveyCard(html, ['<section class="member-hero">']) : html;
   };
   // Straight after the first save: thanks, and on to plan selection (Task 12 recommends plans here).

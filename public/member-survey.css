@@ -74,3 +74,28 @@
 .survey-renew-note{margin:0 0 14px}
 .survey-renew-note a{color:inherit;text-decoration:underline;text-underline-offset:3px}
 @media(max-width:680px){.survey-card{flex-direction:column;align-items:stretch;padding:16px 18px}}
+/* Optional sample week, adjacent to the saved fitness survey. */
+.sample-training{margin:20px 0;color:var(--ink)}
+.sample-training .panel-header{align-items:flex-start;gap:16px}
+.sample-training .panel-header h2{font-size:17px;font-weight:600;letter-spacing:-.02em}
+.sample-training .panel-header p{font-size:13px;line-height:1.7;color:#526454}
+.sample-training-body{padding:0 24px 24px;min-width:0}
+.sample-training-note{font-size:14px;line-height:1.7;margin:0 0 8px;max-width:75ch}
+.sample-training-boundary{font-size:13px;line-height:1.7;color:#526454;margin:0 0 16px;max-width:75ch}
+.sample-training-fit{padding-left:20px;margin:0 0 22px;font-size:13px;line-height:1.7;color:#526454}
+.sample-training-fit li+li{margin-top:5px}
+.sample-week-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;align-items:start}
+.sample-week-day{min-width:0;border:1px solid var(--line);border-radius:9px;padding:18px;overflow-wrap:anywhere}
+.sample-week-day.training{border-color:#b8c6b4;background:#fafcf8}
+.sample-week-day.recovery{background:#f5f8f3}
+.sample-day-heading{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.sample-day-heading h3{font-size:16px;font-weight:600;margin:0}
+.sample-day-type{font-size:11px;font-weight:600;border-radius:4px;padding:4px 7px;background:#edf2e8;color:#3a5434}
+.sample-week-day.rest .sample-day-type{background:#f2f3ef;color:#526454}
+.sample-day-title{font-size:14px;line-height:1.6;margin:12px 0 5px}
+.sample-day-time,.sample-preparation{font-size:13px;line-height:1.7;color:#526454;margin:8px 0}
+.sample-exercises{padding-left:20px;margin:14px 0;font-size:14px;line-height:1.7}
+.sample-exercises li+li{margin-top:14px}
+.sample-exercise-dose{display:block;font-size:13px;color:#526454}
+.sample-exercises p{font-size:13px;line-height:1.7;margin:4px 0 0}
+@media(max-width:680px){.sample-training .panel-header{flex-wrap:wrap}.sample-training-body{padding:0 18px 20px}.sample-week-grid{grid-template-columns:1fr}.sample-week-day{padding:16px}}
