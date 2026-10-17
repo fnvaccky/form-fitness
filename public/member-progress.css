@@ -1,0 +1,55 @@
+/* Private member goals sit beside, rather than replace, the existing attendance tracker. */
+.member-progress{margin-top:0;min-width:0;color:var(--ink)}
+.member-progress .panel-header h2{font-size:18px;font-weight:600}
+.member-progress .panel-header p,.progress-note,.progress-empty p{font-size:13px;line-height:1.7;color:var(--muted)}
+.member-progress-body{padding:0 24px 24px;min-width:0}
+.progress-tabs{margin-top:0}
+.progress-tabs .tab{min-height:44px}
+.member-progress h3{font-size:16px;line-height:1.5;font-weight:600;margin:0 0 12px}
+.progress-empty{padding:16px 0 20px}
+.progress-actions,.progress-row-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.progress-actions .button{min-height:42px}
+.progress-row-actions .button{min-height:36px}
+.progress-goal-heading{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px;margin:22px 0}
+.progress-goal-heading h3{display:inline-block;margin:0 10px 0 0}
+.progress-goal-heading p{font-size:13px;line-height:1.6;color:var(--muted);margin:10px 0 0}
+.progress-values{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:0}
+.progress-values>div{border:1px solid var(--line);border-radius:9px;padding:16px;min-width:0;background:#fafcf8}
+.progress-values dt{font-size:13px;color:var(--muted);line-height:1.5}
+.progress-values dd{font-size:18px;font-weight:600;line-height:1.5;margin:8px 0;overflow-wrap:anywhere}
+.progress-values small{display:block;font-size:12px;line-height:1.6;color:var(--muted)}
+.progress-target{margin:22px 0}
+.progress-target label{font-size:13px;line-height:1.5;font-weight:600;display:block;margin-bottom:8px}
+.progress-target progress{accent-color:#24634e;width:100%;height:14px}
+.progress-target p,.progress-chart figcaption{font-size:12px;line-height:1.7;color:var(--muted)}
+.progress-chart{margin:24px 0;min-width:0;max-width:700px}
+.progress-chart svg{display:block;width:100%;height:auto;border:1px solid var(--line);border-radius:8px;background:#fafcf8}
+.progress-chart-axis{stroke:#bbc7ba;stroke-width:1}
+.progress-chart text{fill:#5f6d5b;font-size:12px;font-family:Arial,sans-serif}
+.progress-chart-line{fill:none;stroke:#24634e;stroke-width:2.5}
+.progress-chart-point{fill:#24634e;stroke:white;stroke-width:1.5}
+.progress-editor{margin:22px 0;border:1px solid var(--line);border-radius:9px;padding:20px;min-width:0;background:#fbfcf8}
+.progress-editor fieldset{border:0;margin:0;padding:0;min-width:0}
+.progress-editor legend{font-size:15px;font-weight:600;line-height:1.5;padding:0;margin-bottom:18px}
+.progress-editor .form-grid{gap:16px}
+.progress-editor .field{margin:0;min-width:0}
+.progress-editor input,.progress-editor select{max-width:100%;width:100%;font-size:14px;min-height:44px}
+.progress-editor .checkline{align-items:flex-start;line-height:1.7;font-size:13px}
+.progress-editor .checkline input{width:17px;min-height:17px;flex-shrink:0;margin-top:3px}
+.progress-editor .form-error{font-size:13px;line-height:1.6;overflow-wrap:anywhere;margin:0 0 14px}
+.member-progress .form-error[hidden]{display:none}
+#progress-status{font-size:13px;line-height:1.7;color:var(--green);min-height:1em;overflow-wrap:anywhere}
+.progress-measurements,.progress-attendance-summary{margin-top:28px;padding-top:24px;border-top:1px solid var(--line)}
+.progress-measurements .data-table{min-width:0;width:100%}
+.progress-measurements .data-table th,.progress-measurements .data-table td{padding:14px 12px;white-space:normal;font-size:13px;line-height:1.6}
+.progress-attendance-summary p{font-size:13px;line-height:1.7;color:var(--muted)}
+.progress-attendance-summary a{color:var(--green);text-decoration:underline}
+.progress-history{margin-top:24px;font-size:13px;line-height:1.7}
+.progress-history summary{cursor:pointer;min-height:44px;padding:8px 0;font-weight:600}
+.progress-history li{padding:10px 0}
+.progress-history small{display:block;color:var(--muted)}
+.member-progress .notice{font-size:13px;line-height:1.7;overflow-wrap:anywhere}
+.member-progress .notice .progress-actions{margin-top:12px}
+.member-progress :is(button,input,select,a,summary):focus-visible,.progress-tabs button:focus-visible{outline:2px solid var(--ink);outline-offset:3px}
+.member-progress .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(max-width:680px){.member-progress-body{padding:0 18px 20px}.progress-editor{padding:16px 12px}.progress-editor .form-grid,.progress-values{grid-template-columns:1fr}.progress-values dd{font-size:17px}.progress-goal-heading .progress-actions{width:100%}.progress-goal-heading .button{flex:1 1 auto}.progress-measurements .data-table th,.progress-measurements .data-table td{padding:12px 6px;font-size:12px}.progress-row-actions{gap:6px}.progress-row-actions .button{font-size:11px;padding:7px 9px}.progress-tabs .tab{flex:1;justify-content:center}.progress-editor .progress-actions .button{flex:1 1 auto}.progress-history ul{padding-left:20px}}

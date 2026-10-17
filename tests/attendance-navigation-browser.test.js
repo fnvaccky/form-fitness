@@ -175,7 +175,7 @@ describe('dedicated Attendance sections',{concurrency:false},()=>{
   try {
    await page.locator('[aria-label="Log out"]').click();await page.getByRole('heading',{name:'Good to see you.',exact:true}).waitFor();
    const member=fixture('member');Object.assign(f,{role:member.role,user:member.user,members:member.members});
-   await page.evaluate(()=>boot());await page.getByRole('link',{name:'Attendance',exact:true}).click();
+   await page.evaluate(()=>boot());await page.getByRole('link',{name:'Attendance & Progress',exact:true}).click();
    release();await page.waitForFunction(()=>currentUser?.role==='member'&&section==='attendance');
    await page.locator('#attendance-tracker-summary').waitFor();
    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));

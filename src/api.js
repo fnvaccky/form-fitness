@@ -8,6 +8,7 @@ import {createStaff,updateStaff,setStaffEnabled,resendStaffSetup} from './staff.
 import {createMember} from './members.js';
 import {attendanceReport,checkinStatus} from './attendance.js';
 import {memberAttendance} from './member-attendance.js';
+import {memberProgress,saveMemberProgress} from './member-progress.js';
 import {validateSurvey,surveyView} from './survey.js';
 import {saveMemberHealth} from './member-health.js';
 import {planRequest} from './plans.js';
@@ -156,6 +157,11 @@ export async function handle(req,res,env=process.env) {
     if(path==='/member-attendance' && req.method==='GET'){
       const query=new URLSearchParams(url.searchParams);query.delete('__path');query.delete('path');
       return send(res,200,await memberAttendance(client,profile,Object.fromEntries(query),today()));
+    }
+    if(path==='/member-progress'){
+      const query=new URLSearchParams(url.searchParams);query.delete('__path');query.delete('path');
+      if(query.size)fail('Progress requests do not accept member, workspace or other query fields.');
+      return send(res,200,{memberProgress:req.method==='GET'?await memberProgress(client,profile,{},today()):await saveMemberProgress(client,profile,body,today())});
     }
     // Task 13: attendance for gym staff, read through the caller's session (RLS keeps it to their workspace).
     if(path==='/reports/attendance' && req.method==='GET'){gymStaff();return send(res,200,await attendanceReport(client,Object.fromEntries(url.searchParams),today()));}

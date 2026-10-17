@@ -175,7 +175,7 @@ describe('member attendance tracker',{concurrency:false},()=>{
     await f.gate.started;
     await page.locator('[aria-label="Log out"]').click();await page.getByRole('heading',{name:'Good to see you.',exact:true}).waitFor();
     const second=fixture(OTHER);Object.assign(f,{user:second.user,member:second.member,events:[],status:200});
-    await page.evaluate(()=>boot());await page.getByRole('link',{name:'Attendance',exact:true}).click();await ready(page);
+    await page.evaluate(()=>boot());await page.getByRole('link',{name:'Attendance & Progress',exact:true}).click();await ready(page);
     assert.match(await completed(page),/Building consistency/);release();
     await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
     assert.equal(await page.evaluate(()=>currentUser.id),OTHER);
