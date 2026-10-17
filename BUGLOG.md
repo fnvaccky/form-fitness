@@ -621,6 +621,7 @@ Released 2026-10-17 after Clark's "go" for this migration and all three commits 
 - **Smoke tests:** 48 of 48 pass.
 
 Task 12B waits for Clark's live retest.
+Accepted 2026-10-17: Clark tested the administrator, staff and purchased-benefit behavior successfully in his own live retest. This records his user acceptance; it is not a new independent test run.
 
 ## BUG-018: The service key and the database owner can TRUNCATE the history tables   (status: noticed)
 Found: 2026-10-17 while closing FEATURE-008's TRUNCATE gap. Where: the database. Same result locally and live (read-only check).
