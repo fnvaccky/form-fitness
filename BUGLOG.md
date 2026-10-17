@@ -681,3 +681,9 @@ Released 2026-10-17 after Clark specifically approved Task 12B migration `202610
 - Existing data counts were unchanged across the migration. Plans, profiles, surveys, memberships, registrations, invoices and payments had identical fingerprints before and after release/smoke; no live fixture or payment was created. `ff_plan_choices` remains empty.
 - Claude's matched Gate 1 local evidence remains reused: 116/116 unit tests, all 9 database suites and all 20 app suites passing; no full local regression was rerun for this release.
 - Configuration, PayMongo test-only mode and disabled automatic cleanup were preserved. `REPORT_TASK_12B.md` has the release result and short live retest. Clark's live acceptance is pending; Task 12C stays on hold until that retest is complete.
+
+Frontend follow-up released 2026-10-17 after Clark approved the member recommendation startup fix (`ba3f453`).
+- Session restoration now waits for DOMContentLoaded, after the deferred scorer and rendering wrappers are ready. The exact existing paid Momentum case recommends Performance without another survey save.
+- Three implementation/test files committed; focused 1/1 regression, syntax/build and unchanged baseline evidence reused. `main` and `merge/option-a` were fast-forwarded and pushed without force or amendments.
+- Production `dpl_9fbPKRcoscoju3tR7yeTBDbudWwd` is READY on `ba3f453`, and the live alias serves the committed startup code byte for byte. Deployed-asset initial startup with a delayed scorer passes with mocked APIs, preserved benefits/invoice/renewal labels and zero browser errors; runtime checks returned no errors for the release window.
+- No database commands, migrations or hosted business-data writes were performed. Configuration remains unchanged. `REPORT_TASK_12B_MEMBER_RECOMMENDATION_FIX_RELEASE.md` records the release. Clark's member-screen retest is pending; Task 12C and unrelated bugs remain on hold.
