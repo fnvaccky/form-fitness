@@ -88,7 +88,7 @@ try{
   await page.getByLabel('How familiar are you with training?',{exact:true}).selectOption(answers.experience);
   await page.getByLabel('Strength training',{exact:true}).check();await page.getByLabel('Cardio',{exact:true}).check();
   await page.getByLabel('Monday',{exact:true}).check();await page.getByLabel('Friday',{exact:true}).check();
-  await page.getByRole('button',{name:'Save my answers',exact:true}).click();
+  await page.getByRole('button',{name:'Save fitness profile',exact:true}).click();
   await page.locator('.survey-thanks').filter({hasText:'Thanks! Choose your plan next.'}).waitFor();
   const saved=result(await db.from('ff_member_surveys').select('*').eq('id',member.id).single());
   assert.deepEqual([saved.experience,saved.exercises,saved.available_days],['returning',['strength','cardio'],['mon','fri']]);
@@ -139,7 +139,7 @@ try{
  await paidPage.locator('#member-survey-form').waitFor();
  await paidPage.getByLabel('How familiar are you with training?',{exact:true}).selectOption('regular');
  await paidPage.getByLabel('Cardio',{exact:true}).check();await paidPage.getByLabel('Sunday',{exact:true}).check();
- await paidPage.getByRole('button',{name:'Save my answers',exact:true}).click();
+ await paidPage.getByRole('button',{name:'Save fitness profile',exact:true}).click();
  await paidPage.getByRole('button',{name:'Edit answers',exact:true}).waitFor();
  assert.equal(await paidPage.locator('.survey-card').count(),0,'the card goes once the survey is saved');
  await paidPage.locator('[data-action="select-plan"][data-plan="basic"]').click();

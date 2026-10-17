@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {eligibleForSampleWeek, createSampleWeek} from '../public/sample-week.js';
+import {sampleWeekEligibility, eligibleForSampleWeek, createSampleWeek} from '../public/sample-week.js';
 
 const TODAY = '2026-10-17';
 const member = {id: 'existing-member', enabled: true, plan: 'basic', terms: {coaching: 'none', coachSessions: 0}};
@@ -45,12 +45,52 @@ test('disabled, unpaid, expired, malformed and overlapping current cycles stay e
   assert.equal(eligibleForSampleWeek(member, null, TODAY), false);
 });
 
+test('eligibility explains every exclusion without relaxing frozen current paid terms', () => {
+  const cases = [
+    ['disabled',{...member,enabled:false},[invoice()]],
+    ['unavailable',member,null],
+    ['no-current-cycle',member,[]],
+    ['upcoming',member,[invoice({start:'2026-10-18',end:'2026-11-16'})]],
+    ['expired',member,[invoice({start:'2026-09-01',end:'2026-09-30'})]],
+    ['invalid-cycle',member,[invoice({start:'2026-02-30'})]],
+    ['invalid-cycle',member,[invoice({start:'2026-11-01',end:'2026-10-01'})]],
+    ['overlapping-cycles',member,[invoice(),invoice({id:'second',paidCents:0})]],
+    ['invalid-payment',member,[invoice({amountCents:0})]],
+    ['invalid-payment',member,[invoice({paidCents:'89900'})]],
+    ['unpaid',member,[invoice({paidCents:0})]],
+    ['group-coaching',member,[invoice({terms:{coaching:'group',coachSessions:0}})]],
+    ['personal-coaching',member,[invoice({terms:{coaching:'personal',coachSessions:4}})]],
+    ['unclear-coaching',member,[invoice({terms:null})]],
+    ['unclear-coaching',member,[invoice({terms:{coachingLabel:'No coach'}})]],
+    ['unclear-coaching',member,[invoice({terms:{coaching:'none',coachSessions:1}})]]
+  ];
+  for (const [reason,person,cycles] of cases) {
+    assert.deepEqual(sampleWeekEligibility(person,cycles,TODAY),{eligible:false,reason});
+    assert.equal(eligibleForSampleWeek(person,cycles,TODAY),false,reason);
+  }
+  assert.deepEqual(sampleWeekEligibility(member,[invoice()],TODAY),{eligible:true,reason:'eligible'});
+  const future = invoice({id:'future',start:'2026-10-31',end:'2026-11-29',terms:{coaching:'personal',coachSessions:4}});
+  assert.deepEqual(sampleWeekEligibility({...member,terms:{coaching:'personal',coachSessions:9}},[future,invoice()],TODAY),{eligible:true,reason:'eligible'});
+  assert.equal(sampleWeekEligibility(member,[invoice({memberId:'someone-else'})],TODAY).reason,'no-current-cycle');
+});
+
 test('incomplete or malformed saved answers ask for the missing answers without fabricating a week', () => {
   assert.deepEqual(createSampleWeek(null), {status: 'incomplete', missing: ['goal', 'experience', 'exercises', 'availableDays']});
   for (const [field, value] of [['goal', 'unknown'], ['experience', 'expert'], ['exercises', ['unknown']], ['availableDays', ['monday']], ['exercises', 'strength'], ['availableDays', []]]) {
     assert.deepEqual(createSampleWeek(answers({[field]: value})), {status: 'incomplete', missing: [field]});
   }
   assert.equal(createSampleWeek(answers({goal: undefined})).status, 'incomplete', 'the profile goal must be merged explicitly');
+});
+
+test('saved disclosed health gets professional guidance only after required answers are complete', () => {
+  const disclosed = {heightCm:175,weightKg:70,ageBand:'20plus',conditions:['asthma']};
+  assert.deepEqual(createSampleWeek(answers(),disclosed),{status:'professional-guidance'});
+  assert.deepEqual(createSampleWeek(null,disclosed),{status:'incomplete',missing:['goal','experience','exercises','availableDays']});
+  for (const conditions of [[],['prefer_not'],['none']]) {
+    const result = createSampleWeek(answers(),{...disclosed,conditions});
+    assert.equal(result.status,'ready');
+    assert.equal(result.days.length,7);
+  }
 });
 
 test('beginner, gradual-return and regular templates have appropriate distinct doses and caps', () => {

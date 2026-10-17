@@ -38,16 +38,32 @@ function validDate(value) {
 // A cycle invoice carries its frozen purchased terms in the existing authorized member response.
 // Do not fall back to catalog/member terms or labels: they can be mutable or legacy defaults.
 // Exactly one valid current cycle is required; an overlapping cycle is ambiguous even if only one is paid.
-export function eligibleForSampleWeek(member, invoices, today) {
-  if (member?.enabled !== true || !member.id || !Array.isArray(invoices) || !validDate(today)) return false;
-  const current = invoices.filter(invoice => invoice?.memberId === member.id
-    && validDate(invoice.start) && validDate(invoice.end)
-    && invoice.start <= today && today <= invoice.end);
-  if (current.length !== 1) return false;
+export function sampleWeekEligibility(member, invoices, today) {
+  const excluded = reason => ({eligible:false,reason});
+  if (member?.enabled !== true) return excluded('disabled');
+  if (!member.id || !Array.isArray(invoices) || !validDate(today)) return excluded('unavailable');
+  const own = invoices.filter(invoice => invoice?.memberId === member.id);
+  const valid = own.filter(invoice => validDate(invoice.start) && validDate(invoice.end) && invoice.start <= invoice.end);
+  const current = valid.filter(invoice => invoice.start <= today && today <= invoice.end);
+  if (current.length > 1) return excluded('overlapping-cycles');
+  if (!current.length) {
+    if (own.length !== valid.length) return excluded('invalid-cycle');
+    if (valid.some(invoice => invoice.start > today)) return excluded('upcoming');
+    if (valid.some(invoice => invoice.end < today)) return excluded('expired');
+    return excluded('no-current-cycle');
+  }
   const invoice = current[0], terms = invoice.terms;
-  return Number.isSafeInteger(invoice.amountCents) && invoice.amountCents > 0
-    && Number.isSafeInteger(invoice.paidCents) && invoice.paidCents >= invoice.amountCents
-    && !!terms && !Array.isArray(terms) && terms.coaching === 'none' && terms.coachSessions === 0;
+  if (!Number.isSafeInteger(invoice.amountCents) || invoice.amountCents <= 0
+    || !Number.isSafeInteger(invoice.paidCents) || invoice.paidCents < 0) return excluded('invalid-payment');
+  if (invoice.paidCents < invoice.amountCents) return excluded('unpaid');
+  if (terms && !Array.isArray(terms) && terms.coaching === 'group') return excluded('group-coaching');
+  if (terms && !Array.isArray(terms) && terms.coaching === 'personal') return excluded('personal-coaching');
+  if (!terms || Array.isArray(terms) || terms.coaching !== 'none' || terms.coachSessions !== 0) return excluded('unclear-coaching');
+  return {eligible:true,reason:'eligible'};
+}
+
+export function eligibleForSampleWeek(member, invoices, today) {
+  return sampleWeekEligibility(member,invoices,today).eligible;
 }
 
 // Seven days make exhaustive selection small. Prefer the most workouts allowed, then even spacing,
@@ -103,9 +119,9 @@ function trainingSession(inputs, slot) {
 // Call with the saved survey plus the profile's goal, as for membership recommendations.
 // No clock, network, storage or input mutation: the same known answers always produce the same sample.
 export function createSampleWeek(answers, health = null) {
-  if (exerciseGuidance(health) === 'professional') return {status: 'professional-guidance'};
   const inputs = recommendationInputs(answers);
   if (inputs.missing.length) return {status: 'incomplete', missing: inputs.missing};
+  if (exerciseGuidance(health) === 'professional') return {status: 'professional-guidance'};
   const selected = trainingDays(inputs.availableDays, LEVELS[inputs.experience].cap);
   let workout = 0, recovery = 0;
   const days = DAYS.map((id, index) => {

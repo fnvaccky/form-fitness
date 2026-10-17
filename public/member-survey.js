@@ -19,6 +19,8 @@ const surveyOptions = {
 const surveyLabel = (options, value) => options.find(([key]) => key === value)?.[1] || 'Not provided';
 // Shown once on plan selection, straight after the first save.
 let surveyThanks = false;
+let fitnessProfileSavingMember = null;
+let fitnessProfilePendingDraft = null;
 // A fully paid cycle that is current or still to come: such a member keeps using the app while the survey waits.
 const hasPaidCycle = member => state.invoices.some(i => i.memberId === member.id && i.paidCents >= i.amountCents && i.end >= DEMO_DATE);
 const surveyCard = () => '<section class="panel survey-card" aria-label="Fitness profile"><p><strong>Complete your fitness profile</strong> — it takes a minute and helps us recommend the right plan.</p><button class="button primary" data-action="survey-open">Complete fitness profile</button></section>';
@@ -59,29 +61,70 @@ function surveyQuestions(member, prefix = 'survey') {
 }
 
 function surveyForm(member, first = false) {
-  return `<form id="member-survey-form" novalidate>
+  const pending = fitnessProfileSavingMember === member.id ? fitnessProfilePendingDraft : null;
+  const draftMember = pending ? {...member,goal:pending.answers.goal,survey:{...member.survey,...pending.answers}} : member;
+  return `<form id="member-survey-form" data-first="${pending?pending.first:!member.survey}" data-saving="${!!pending}"${pending?' aria-busy="true"':''} novalidate><fieldset class="fitness-profile-fields"${pending?' disabled':''}>
     <div id="survey-errors" class="survey-errors" role="alert" tabindex="-1" hidden></div>
-    ${surveyQuestions(member)}
-    <div class="survey-form-footer"><p class="survey-note">${first?'All four answers are needed. You can change them later under My membership.':'All four answers are needed to save.'}</p><div class="survey-actions">${member.survey&&!first?'<button type="button" class="button" data-action="survey-cancel">Cancel</button>':''}<button type="submit" class="button primary">Save my answers</button></div></div>
-  </form>`;
+    ${surveyQuestions(draftMember)}
+    ${window.memberHealthPanel?.(member,true,pending?.health)||''}
+    <div class="survey-form-footer"><p class="survey-note">All four fitness answers are needed. Health details are optional.${first?' You can change your answers later under My membership.':''}</p><div class="survey-actions"><button type="button" class="button" data-action="survey-cancel">Cancel</button><button type="submit" class="button primary">${pending?'Saving…':'Save fitness profile'}</button></div></div>
+  </fieldset></form>`;
 }
 
 function memberSurveyPanel(member, editing = false) {
   const own = currentUser?.role === 'member' && currentUser.memberId === member.id;
-  return `<section id="fitness-survey" class="panel survey-panel" aria-labelledby="survey-title"><div class="panel-header"><div><h2 id="survey-title" tabindex="-1">${own?'Your fitness profile':'Member fitness survey'}</h2><p>${own?'Your goal, experience, exercise preferences and usual days.':'Preferences shared by this member.'}</p></div>${own&&member.survey&&!editing?'<button class="button small" data-action="survey-edit">Edit answers</button>':''}</div><div class="survey-body"><p class="survey-privacy">${own?'Your goal and training preference answers are visible to your gym’s staff and administrators. They help guide a conversation about your training.':'Only the member can update these answers.'}</p>${own&&(!member.survey||editing)?surveyForm(member):surveySummary(member)}${own?(window.memberHealthPanel?.(member)||''):''}<p id="survey-status" class="survey-status" role="status" tabindex="-1"></p></div></section>`;
+  const editor = own && (!member.survey || editing || fitnessProfileSavingMember === member.id);
+  return `<section id="fitness-survey" class="panel survey-panel" aria-labelledby="survey-title"><div class="panel-header"><div><h2 id="survey-title" tabindex="-1">${own?'Your fitness profile':'Member fitness survey'}</h2><p>${own?'Your goal, experience, exercise preferences and usual days.':'Preferences shared by this member.'}</p></div>${own&&member.survey&&!editor?'<button class="button small" data-action="survey-edit">Edit answers</button>':''}</div><div class="survey-body"><p class="survey-privacy">${own?'Your goal and training preference answers are visible to your gym’s staff and administrators. They help guide a conversation about your training.':'Only the member can update these answers.'}</p>${editor?surveyForm(member):surveySummary(member)+(own?(window.memberHealthPanel?.(member)||''):'')}<p id="survey-status" class="survey-status" role="status" tabindex="-1"></p></div></section>`;
 }
 
 // First login: a member without a survey sees only this, with a short welcome. There is no skip; Sign out stays.
 function firstSurveyScreen(member) {
   return `<main class="survey-first"><header class="survey-first-top"><span class="survey-first-brand"><span class="brandmark">R</span><strong>RepReady</strong></span><button class="button" data-action="logout">Sign out</button></header>
-  <section id="fitness-survey" class="panel survey-panel" aria-labelledby="survey-title"><div class="panel-header"><div><h1 id="survey-title" tabindex="-1">Welcome, ${esc(member.name.split(' ')[0])}.</h1><p>Before you start, tell your gym how you like to train. It takes about a minute.</p></div></div><div class="survey-body"><p class="survey-privacy">Your goal and training preference answers are visible to your gym’s staff and administrators. They help guide a conversation about your training.</p>${surveyForm(member,true)}${window.memberHealthPanel?.(member)||''}<p id="survey-status" class="survey-status" role="status" tabindex="-1"></p></div></section></main>`;
+  <section id="fitness-survey" class="panel survey-panel" aria-labelledby="survey-title"><div class="panel-header"><div><h1 id="survey-title" tabindex="-1">Welcome, ${esc(member.name.split(' ')[0])}.</h1><p>Before you start, tell your gym how you like to train. It takes about a minute.</p></div></div><div class="survey-body"><p class="survey-privacy">Your goal and training preference answers are visible to your gym’s staff and administrators. They help guide a conversation about your training.</p>${surveyForm(member,true)}<p id="survey-status" class="survey-status" role="status" tabindex="-1"></p></div></section></main>`;
 }
 
 function replaceSurvey(editing = false) {
   const member = memberById(currentUser?.memberId);
   if (!member || currentUser.role !== 'member') return;
+  if (document.querySelector('#member-survey-form[data-saving="true"]')) return;
+  if (!editing) window.fitnessProfileSaveState = null;
+  if (document.querySelector('.survey-first')) {
+    if (member.survey) {
+      // Required answers may already be confirmed after a partial optional save failure.
+      surveyThanks = true; mode = 'member'; section = 'overview';
+      if (location.hash !== '#/member/overview') history.replaceState({}, '', '#/member/overview');
+      render();
+    } else {
+      // Cancel resets both drafts without skipping the required first-login survey.
+      document.getElementById('app').innerHTML = firstSurveyScreen(member);
+      document.getElementById('survey-goal').focus();
+    }
+    return;
+  }
+  if (!editing && member.survey && document.getElementById('member-survey-form')?.dataset.first === 'true') {
+    // A paid member's required answers may have saved before an optional failure; remove its reminder too.
+    render();
+    document.getElementById('survey-title')?.focus();
+    return;
+  }
   document.getElementById('fitness-survey').outerHTML = memberSurveyPanel(member, editing);
+  refreshFitnessDerived(member);
   document.getElementById(editing?'survey-goal':'survey-title').focus();
+}
+
+// Update computed content from confirmed saved state without replacing a partially saved draft.
+function refreshFitnessDerived(member) {
+  if (document.querySelector('.survey-first')) return;
+  const sample = document.getElementById('sample-training'), sampleHtml = window.sampleTrainingPanel?.(member) || '';
+  if (sample) sample.outerHTML = sampleHtml;
+  else if (sampleHtml) document.getElementById('fitness-survey')?.insertAdjacentHTML('afterend',sampleHtml);
+  if (section !== 'members') return;
+  const template = document.createElement('template');
+  template.innerHTML = memberMembership();
+  for (const selector of ['.plan-recommendation','.plans-grid']) {
+    const old = document.querySelector(selector), updated = template.content.querySelector(selector);
+    if (old && updated) old.replaceWith(updated);
+  }
 }
 
 // At the desk (Add member): the same questions, optional and collapsed. Filled in, it is saved with the account.
@@ -117,7 +160,10 @@ function deskSurveyAnswers() {
   memberMembership = function() {
     const member = memberById(selectedMember), marker = '<div class="panel-header" style="padding-left:0">';
     let html = surveyBaseMembership();
-    if (member && html.includes(marker)) html = html.replace(marker, memberSurveyPanel(member) + (window.sampleTrainingPanel?.(member) || '') + marker);
+    if (member) {
+      const panels = memberSurveyPanel(member) + (window.sampleTrainingPanel?.(member) || '');
+      html = html.includes(marker) ? html.replace(marker,panels+marker) : html+panels;
+    }
     return ownMemberWithoutSurvey() ? withSurveyCard(html, ['<section class="member-hero">']) : html;
   };
   // Straight after the first save: thanks, and on to plan selection (Task 12 recommends plans here).
@@ -165,6 +211,7 @@ document.addEventListener('submit', async event => {
   if (form.id !== 'member-survey-form') return;
   event.preventDefault(); event.stopImmediatePropagation();
   if (form.dataset.saving === 'true' || currentUser?.role !== 'member') return;
+  if (fitnessProfileSavingMember === currentUser.memberId) { toast('Your fitness profile is still saving.'); return; }
   const data = new FormData(form);
   const answers = {goal:data.get('goal'),experience:data.get('experience'),exercises:data.getAll('exercises'),availableDays:data.getAll('availableDays')};
   const problems = [];
@@ -177,24 +224,76 @@ document.addEventListener('submit', async event => {
   check(surveyOptions.experience.some(([value])=>value===answers.experience),'survey-experience','survey-experience-error','Choose your training experience.');
   check(answers.exercises.length>0,'survey-strength','survey-exercises-error','Choose at least one exercise preference.');
   check(answers.availableDays.length>0,'survey-mon','survey-days-error','Choose at least one day you are usually available.');
+  let health;
+  const healthError = document.getElementById('member-health-error');
+  if (healthError) healthError.hidden = true;
+  try {
+    if (!window.healthProfileValidate) throw Error('Optional details are still loading. Try again.');
+    health = window.healthProfileValidate(form);
+  } catch (error) {
+    if (healthError) { healthError.hidden = false; healthError.textContent = error.message; }
+    problems.push({id:'health-height',message:error.message});
+  }
   const summary = document.getElementById('survey-errors');
   summary.hidden = !problems.length;
   if (problems.length) { summary.innerHTML = `<strong>Check your answers</strong><ul>${problems.map(({id,message})=>`<li><a href="#${id}">${esc(message)}</a></li>`).join('')}</ul>`; summary.focus(); return; }
   const memberId = currentUser.memberId, submit = form.querySelector('[type="submit"]');
+  let member = memberById(memberId);
+  const first = form.dataset.first === 'true';
+  const sameValues = (left = [], right = []) => left.length === right.length && left.every(value => right.includes(value));
+  const sameSurvey = member.survey && member.goal === answers.goal && member.survey.experience === answers.experience
+    && sameValues(member.survey.exercises,answers.exercises) && sameValues(member.survey.availableDays,answers.availableDays);
+  const confirmedHealth = window.healthProfileSaved();
+  const sameHealth = confirmedHealth.heightCm === health.heightCm && confirmedHealth.weightKg === health.weightKg
+    && confirmedHealth.ageBand === health.ageBand && sameValues(confirmedHealth.conditions,health.conditions);
   form.dataset.saving = 'true'; form.setAttribute('aria-busy', 'true');
+  fitnessProfileSavingMember = memberId;
+  fitnessProfilePendingDraft = {answers,health,first};
   const controls = [...form.querySelectorAll('input,select,button')];
   controls.forEach(control => control.disabled = true); submit.textContent = 'Saving…';
   try {
-    const saved = await api('/member-survey', answers);
+    // Separate authorized endpoints preserve health privacy. Only changed, unconfirmed sections need saving.
+    const jobs = [];
+    if (!sameSurvey) jobs.push({section:'fitness',request:api('/member-survey',answers)});
+    if (!sameHealth) jobs.push({section:'health',request:api('/member-health',health)});
+    const results = await Promise.allSettled(jobs.map(job => job.request));
     // A member may navigate or sign out while the save is in flight.
     if (currentUser?.role !== 'member' || currentUser.memberId !== memberId) return;
-    const member = memberById(memberId), first = !member.survey, paid = hasPaidCycle(member);
-    Object.assign(member, {goal:saved.goal,survey:saved.survey});
+    member = memberById(memberId);
+    if (!member) return;
+    const paid = hasPaidCycle(member);
+    const failures = [], completed = [];
+    results.forEach((result,index) => {
+      const job = jobs[index], label = job.section === 'fitness' ? 'Fitness answers' : 'Health details';
+      if (result.status === 'rejected') {
+        failures.push({section:job.section,message:`${label} could not be saved: ${result.reason?.message || 'Please try again.'}`});
+      } else if (job.section === 'fitness') {
+        Object.assign(member, {goal:result.value.goal,survey:result.value.survey});
+        completed.push(label);
+      } else {
+        state.memberHealth = result.value.memberHealth;
+        completed.push(label);
+      }
+    });
+    fitnessProfileSavingMember = null;
+    fitnessProfilePendingDraft = null;
+    if (failures.length) {
+      window.fitnessProfileSaveState = {memberId,healthFailed:failures.some(item => item.section === 'health'),surveyFailed:failures.some(item => item.section === 'fitness')};
+      refreshFitnessDerived(member);
+      const currentSummary = document.querySelector('#member-survey-form #survey-errors');
+      if (currentSummary) {
+        currentSummary.hidden = false;
+        currentSummary.textContent = `${completed.length?completed.join(' and ')+' saved. ':''}${failures.map(item => item.message).join(' ')} Your draft is kept. Select Save fitness profile to retry the unsaved section${failures.length>1?'s':''}.${first&&member.survey?' Your required fitness answers are saved; Cancel discards the optional draft and lets you continue using your saved profile.':''}`;
+        currentSummary.focus();
+      }
+      return;
+    }
+    window.fitnessProfileSaveState = null;
     if (first && paid) {
       // A paid member answered from the card: stay here; the card goes.
       render();
       const status = document.getElementById('survey-status');
-      if (status) { status.textContent = 'Your answers are saved. You can update them anytime.'; status.focus(); }
+      if (status) { status.textContent = 'Your fitness profile is saved. You can update it anytime.'; status.focus(); }
       toast('Thanks! Your fitness profile is saved.');
       return;
     }
@@ -207,16 +306,23 @@ document.addEventListener('submit', async event => {
       toast(member.start ? 'Thanks! Your fitness profile is saved.' : 'Thanks! Choose your plan next.');
       return;
     }
-    if (form.isConnected) {
+    if (form.isConnected || document.getElementById('member-survey-form')) {
       render();
       const status = document.getElementById('survey-status');
-      if (status) { status.textContent = 'Your answers are saved. You can update them anytime.'; status.focus(); }
+      if (status) { status.textContent = 'Your fitness profile is saved. You can update it anytime.'; status.focus(); }
     }
-    toast('Fitness survey saved.');
+    toast('Fitness profile saved.');
   } catch (error) {
     if (form.isConnected) { summary.hidden = false; summary.textContent = error.message; summary.focus(); }
   } finally {
-    if (form.isConnected) { form.dataset.saving = 'false'; form.removeAttribute('aria-busy'); controls.forEach(control => control.disabled = false); submit.textContent = 'Save my answers'; }
+    if (fitnessProfileSavingMember === memberId) { fitnessProfileSavingMember = null; fitnessProfilePendingDraft = null; }
+    if (form.isConnected) { form.dataset.saving = 'false'; form.removeAttribute('aria-busy'); controls.forEach(control => control.disabled = false); submit.textContent = 'Save fitness profile'; }
+    const activeForm = document.getElementById('member-survey-form');
+    if (activeForm && currentUser?.memberId === memberId) {
+      activeForm.dataset.saving = 'false'; activeForm.removeAttribute('aria-busy');
+      activeForm.querySelector('.fitness-profile-fields').disabled = false;
+      activeForm.querySelector('[type="submit"]').textContent = 'Save fitness profile';
+    }
   }
 }, true);
 // Error links focus the field without entering the app's hash router.

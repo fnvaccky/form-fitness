@@ -107,7 +107,7 @@ try{
   await page.getByLabel('What is your main goal?',{exact:true}).selectOption('Build strength');
   await page.getByLabel('How familiar are you with training?',{exact:true}).selectOption('beginner');
   await page.getByLabel('Strength training',{exact:true}).check();await page.getByLabel('Monday',{exact:true}).check();await page.getByLabel('Thursday',{exact:true}).check();
-  await page.getByRole('button',{name:'Save my answers',exact:true}).click();
+  await page.getByRole('button',{name:'Save fitness profile',exact:true}).click();
   await page.locator('.survey-thanks').filter({hasText:'We recommend Performance for you; see why below. Any plan can be chosen.'}).waitFor();
   const block=page.locator('.plan-recommendation');
   assert.match(await block.innerText(),/Recommended for you[\s\S]*Performance[\s\S]*You’re new to training, and this plan includes a personal coach\.[\s\S]*It matches your interest in strength training\./i,`${label}: the reasons`);

@@ -50,7 +50,7 @@ test('every disclosed condition or limitation replaces generated exercises with 
     const saved = health({conditions:[condition]});
     assert.equal(exerciseGuidance(saved),'professional');
     assert.deepEqual(createSampleWeek(answers,saved),{status:'professional-guidance'});
-    assert.deepEqual(createSampleWeek(null,saved),{status:'professional-guidance'});
+    assert.equal(createSampleWeek(null,saved).status,'incomplete');
   }
   assert.equal(exerciseGuidance(health({conditions:['none','asthma']})),'professional','a malformed contradictory record must not suppress a disclosure');
 });

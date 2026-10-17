@@ -55,7 +55,7 @@ try {
   assert.equal(await page.getByRole('link',{name:'My overview',exact:true}).count(),0,'no navigation until the survey is saved');
   assert.equal(await page.getByRole('button',{name:/skip/i}).count(),0,'no skip');
   await page.locator('.survey-first').screenshot({path:'test-results/survey-first-desktop.png',animations:'disabled'});
-  await page.getByRole('button',{name:'Save my answers',exact:true}).click();
+  await page.getByRole('button',{name:'Save fitness profile',exact:true}).click();
   assert.equal(saveCount,0,'incomplete forms never submit');
   assert.equal(await page.locator('#survey-errors a').count(),3,'the goal comes preselected from the profile; three answers are missing');
   assert.equal(await page.locator('#survey-errors').evaluate(el=>el===document.activeElement),true);
@@ -74,8 +74,8 @@ try {
   }
   await page.setViewportSize({width:1440,height:1000});
   failSave=true;
-  await page.getByRole('button',{name:'Save my answers',exact:true}).click();
-  await page.getByText('Could not save your answers. Please try again.',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Save fitness profile',exact:true}).click();
+  await page.locator('#survey-errors').filter({hasText:'Could not save your answers. Please try again.'}).waitFor();
   assert.equal(await page.getByLabel('Cardio',{exact:true}).isChecked(),true,'answers survive a failed save');
   failSave=false;delaySave=true;
   const before=saveCount;
@@ -103,10 +103,10 @@ try {
   assert.match(await page.locator('#fitness-survey').innerText(),/getting back into it/,'cancel restores saved answers');
   await page.getByRole('button',{name:'Edit answers',exact:true}).click();
   await page.getByLabel('How familiar are you with training?',{exact:true}).selectOption('regular');
-  await page.getByRole('button',{name:'Save my answers',exact:true}).click();
+  await page.getByRole('button',{name:'Save fitness profile',exact:true}).click();
   await page.getByRole('button',{name:'Edit answers',exact:true}).waitFor();
   assert.match(await page.locator('#fitness-survey').innerText(),/train regularly/);
-  assert.match(await page.locator('#survey-status').innerText(),/answers are saved/);
+  assert.match(await page.locator('#survey-status').innerText(),/fitness profile is saved/);
   await page.getByRole('button',{name:'Edit answers',exact:true}).click();
   await page.waitForFunction(()=>!document.getElementById('toast').classList.contains('show'));
   await page.locator('#fitness-survey').screenshot({path:'test-results/survey-profile-desktop.png',animations:'disabled'});
@@ -115,7 +115,7 @@ try {
     await page.locator('#fitness-survey').screenshot({path:`test-results/survey-profile-mobile-${width}.png`,animations:'disabled'});
   }
   await page.getByLabel('Wednesday',{exact:true}).check();
-  await page.getByRole('button',{name:'Save my answers',exact:true}).click();
+  await page.getByRole('button',{name:'Save fitness profile',exact:true}).click();
   await page.getByRole('button',{name:'Edit answers',exact:true}).waitFor();
   assert(member.survey.availableDays.includes('wed'),'a phone-sized save keeps the new day');
   await page.setViewportSize({width:1440,height:1000});
@@ -134,7 +134,7 @@ try {
     await page.locator(`[data-action="profile"][data-id="${member.id}"]`).first().click();
     await page.getByRole('heading',{name:'Fitness survey',exact:true}).waitFor();
     assert.match(await page.locator('.survey-staff').innerText(),/Wednesday/);
-    assert.equal(await page.getByRole('button',{name:'Save my answers',exact:true}).count(),0);
+    assert.equal(await page.getByRole('button',{name:'Save fitness profile',exact:true}).count(),0);
     assert.equal(await page.getByRole('button',{name:'Edit answers',exact:true}).count(),0);
     if(staffRole==='staff')await page.locator('.modal').screenshot({path:'test-results/survey-staff.png',animations:'disabled'});
     await page.keyboard.press('Escape');

@@ -150,8 +150,8 @@ describe('optional sample training on My membership', {concurrency:false}, () =>
       await page.locator('#survey-strength').uncheck();
       await page.locator('#survey-mobility').check();
       for (const day of DAYS) await page.locator(`#survey-${day}`).setChecked(['tue','thu','sun'].includes(day));
-      await page.getByRole('button',{name:'Save my answers',exact:true}).click();
-      await page.locator('#survey-status').filter({hasText:'Your answers are saved.'}).waitFor();
+      await page.getByRole('button',{name:'Save fitness profile',exact:true}).click();
+      await page.locator('#survey-status').filter({hasText:'Your fitness profile is saved.'}).waitFor();
       assert.equal(f.saves.length,1);
       assert.deepEqual(f.saves[0],{goal:'Stay consistent',experience:'returning',exercises:['mobility'],availableDays:['tue','thu','sun']});
       await assertWeek(page,['tue','thu','sun']);
@@ -191,7 +191,9 @@ describe('optional sample training on My membership', {concurrency:false}, () =>
       f.member.terms = f.invoices[0].terms;
       f.invoices[1].terms = {...fixture().plans[0]};
       await reload(page);
-      assert.equal(await page.locator('#sample-training').count(),0);
+      assert.equal(await page.locator('#sample-training').count(),1);
+      assert.equal(await page.locator('.sample-week-day').count(),0);
+      assert.match(await page.locator('#sample-training').innerText(),/coach/i);
       // An unpaid next cycle also leaves the current no-coach sample in place, without selection buttons.
       f.invoices[0].terms = {...fixture().plans[0]};
       f.member.terms = f.invoices[0].terms;
@@ -223,7 +225,9 @@ describe('optional sample training on My membership', {concurrency:false}, () =>
       // A member display snapshot and editable catalog still saying "No coach" must not be a fallback.
       const page = await open(f);
       try {
-        assert.equal(await page.locator('#sample-training').count(),0,label);
+        assert.equal(await page.locator('#sample-training').count(),1,label);
+        assert.equal(await page.locator('.sample-week-day').count(),0,label);
+        assert.match(await page.locator('#sample-training').innerText(),/coach|purchased|confirm/i,label);
         assert.equal(await page.locator('#fitness-survey').count(),1);
         await page.evaluate(() => navigate('overview'));
         assert.equal(await page.getByRole('button',{name:'Show my member QR',exact:true}).count(),1,'paid pass control remains accessible');
@@ -249,7 +253,8 @@ describe('optional sample training on My membership', {concurrency:false}, () =>
       if (scenario === 'onboarding') { f.member.survey = null; f.invoices[0].paidCents = 0; }
       const page = await open(f);
       try {
-        assert.equal(await page.locator('#sample-training').count(),0,scenario);
+        assert.equal(await page.locator('#sample-training').count(),scenario==='onboarding'?0:1,scenario);
+        assert.equal(await page.locator('.sample-week-day').count(),0,scenario);
         if (scenario === 'onboarding') {
           assert.equal(await page.locator('.survey-first #member-survey-form').isVisible(),true);
           assert.equal(await page.locator('.membership-card').count(),0);

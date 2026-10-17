@@ -14,7 +14,7 @@ page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()
 const pass=s=>{checks.push(s);console.log('PASS: '+s);};
 const heading=async name=>{await page.getByRole('heading',{name,exact:true}).waitFor();};
 // Task 11: a member without a fitness survey is asked for it first; answer it if this demo customer hasn't yet.
-const answerSurveyIfAsked=async()=>{await page.locator('.survey-first,.page-heading').first().waitFor();if(await page.locator('.survey-first').count()){await page.getByLabel('How familiar are you with training?',{exact:true}).selectOption('regular');await page.getByLabel('Strength training',{exact:true}).check();await page.getByLabel('Monday',{exact:true}).check();await page.getByRole('button',{name:'Save my answers',exact:true}).click();await page.locator('.survey-first').waitFor({state:'detached'});}};
+const answerSurveyIfAsked=async()=>{await page.locator('.survey-first,.page-heading').first().waitFor();if(await page.locator('.survey-first').count()){await page.getByLabel('How familiar are you with training?',{exact:true}).selectOption('regular');await page.getByLabel('Strength training',{exact:true}).check();await page.getByLabel('Monday',{exact:true}).check();await page.getByRole('button',{name:'Save fitness profile',exact:true}).click();await page.locator('.survey-first').waitFor({state:'detached'});}};
 const login=async a=>{await page.getByLabel('Email address',{exact:true}).fill(a.email);await page.getByLabel('Password',{exact:true}).fill(a.password);await page.getByRole('button',{name:'Log in',exact:true}).click();};
 await mkdir('test-results',{recursive:true});
 try{

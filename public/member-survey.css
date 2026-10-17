@@ -19,6 +19,7 @@
 .survey-panel :is(input,select,button,a):focus-visible,.survey-errors:focus,.survey-panel [tabindex="-1"]:focus{outline:2px solid var(--ink);outline-offset:4px}
 .survey-panel ::selection{background:#d3e5bd;color:var(--ink)}
 .survey-form-footer{display:flex;align-items:center;justify-content:space-between;gap:20px;border-top:1px solid var(--line);margin-top:28px;padding-top:20px}
+.fitness-profile-fields{border:0;padding:0;margin:0;min-width:0}
 .survey-form-footer .survey-note{margin:0;max-width:40ch}
 .survey-actions{display:flex;gap:10px;flex-shrink:0}
 .survey-panel .button{min-height:44px;font-size:13px}
@@ -99,8 +100,11 @@
 .sample-exercise-dose{display:block;font-size:13px;color:#526454}
 .sample-exercises p{font-size:13px;line-height:1.7;margin:4px 0 0}
 @media(max-width:680px){.sample-training .panel-header{flex-wrap:wrap}.sample-training-body{padding:0 18px 20px}.sample-week-grid{grid-template-columns:1fr}.sample-week-day{padding:16px}}
-/* Optional health information is a separate member-only form, never part of the survey gate. */
+/* Private optional health fields share one editor while remaining outside the required survey gate. */
 .health-panel{margin:20px 0;color:var(--ink)}
+.survey-body>.health-panel,#member-survey-form>.health-panel{border-top:1px solid var(--line);margin:28px 0 0;padding-top:22px;min-width:0}
+.health-heading h3{font-size:17px;font-weight:600;margin:0 0 8px;letter-spacing:-.02em}
+.health-heading p{font-size:13px;line-height:1.7;color:#526454;margin:0 0 16px}
 .health-panel .panel-header{align-items:flex-start;gap:16px}
 .health-panel .panel-header h2{font-size:17px;font-weight:600;letter-spacing:-.02em}
 .health-panel .panel-header p,.health-privacy,.health-note{font-size:13px;line-height:1.7;color:#526454}

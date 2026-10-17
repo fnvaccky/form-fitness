@@ -33,7 +33,8 @@
     "test:plans-concurrency": "node tests/plans-concurrency.js",
     "test:recommendations": "node --env-file-if-exists=.env.local tests/recommendations.js",
     "test:recommendations:member": "node --test tests/recommendations-member.test.js",
-    "test:sample-training": "node --test tests/sample-week.test.js tests/health-inputs.test.js tests/sample-training-browser.test.js tests/member-health-browser.test.js",
+    "test:sample-training": "node --test tests/sample-week.test.js tests/health-inputs.test.js tests/sample-training-browser.test.js tests/member-health-browser.test.js tests/fitness-profile-browser.test.js",
+    "test:fitness-profile": "node --test tests/fitness-profile-browser.test.js",
     "test:member-cash": "node --test tests/member-cash-browser.test.js",
     "test:portal-views": "node --test tests/portal-view-browser.test.js tests/portal-authorization.test.js",
     "reset:test-data": "node --env-file-if-exists=.env.local scripts/reset-test-data.js"
